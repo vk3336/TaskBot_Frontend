@@ -31,7 +31,7 @@ async function transcribeAudio(audioBlob) {
 async function extractTaskFields(transcript, users) {
   const userList = users.map(u => `• ${u.name} (id: ${u.id})`).join('\n')
   const systemPrompt = `You are an intelligent task extraction assistant for a project management tool.
-Your job is to extract task details from a voice note transcript and rewrite the description in professional, clear, and motivating language.
+Your job is to extract task details from a voice note transcript and rewrite the description in a rich, well-formatted, professional style using emojis, bullet points, and clear sections.
 
 Available team members:
 ${userList}
@@ -44,19 +44,33 @@ Extract and return ONLY a valid JSON object with these fields:
   "priority": "Low | Normal | High | Urgent — infer from context, default Normal",
   "dateStartDate": "YYYY-MM-DD or null",
   "dateEndDate": "YYYY-MM-DD or null",
-  "description": "Professionally rewritten, detailed task description. Make it actionable and motivating."
+  "description": "See formatting rules below"
 }
+
+Description formatting rules — make it easy to read and act on:
+- Start with a one-line summary of the task goal using a relevant emoji (e.g. 🎯 or 🚀)
+- Add a blank line, then use sections with emoji headers like:
+  📋 **Objective:** ...
+  ✅ **Key Requirements:**
+  • requirement 1
+  • requirement 2
+  🔑 **Key Points / Notes:** (if applicable)
+  • note 1
+  ⚠️ **Important:** (only if there are deadlines, blockers, or critical info)
+- Keep bullet points short and actionable
+- End with a motivating one-liner if appropriate (e.g. "Let's make it happen! 💪")
+- Use plain line breaks (\\n) for structure — no markdown headers like ## or **
 
 Rules:
 - Match assignee names loosely (e.g. "ali" → match closest user). Multiple names may be mentioned.
 - Today is ${new Date().toISOString().split('T')[0]}; interpret relative date terms
-- Return ONLY the JSON object, no markdown, no explanation`
+- Return ONLY the JSON object, no markdown code fences, no explanation`
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${OPENAI_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
       temperature: 0.2,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -74,12 +88,15 @@ Rules:
 }
 
 /* ── Step labels ── */
-const CONFIRM_STEPS = ['name', 'assignee', 'description']
+const CONFIRM_STEPS = ['name', 'assignee', 'priority', 'dateStartDate', 'dateEndDate', 'description']
 
 function fieldLabel(step) {
   if (step === 'name') return 'Task Name'
   if (step === 'assignee') return 'Assigned To'
   if (step === 'description') return 'Task Description'
+  if (step === 'priority') return 'Priority'
+  if (step === 'dateStartDate') return 'Start Date'
+  if (step === 'dateEndDate') return 'Due Date'
   return step
 }
 
@@ -264,6 +281,12 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     const label = fieldLabel(step)
     const displayValue = step === 'assignee'
       ? getAssigneeDisplay(editValues)
+      : step === 'priority'
+      ? (editValues.priority || 'Normal')
+      : step === 'dateStartDate'
+      ? (editValues.dateStartDate || '(not set)')
+      : step === 'dateEndDate'
+      ? (editValues.dateEndDate || '(not set)')
       : (editValues[step] || '(not set)')
 
     return (
@@ -299,6 +322,21 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
                 </div>
                 <button className="vf-btn-save" onClick={handleEditSave}>✓ Save &amp; Continue</button>
               </div>
+            ) : step === 'priority' ? (
+              <div className="vf-edit-area">
+                <select className="vf-input" value={editInput} onChange={e => setEditInput(e.target.value)}>
+                  {['Low', 'Normal', 'High', 'Urgent'].map(p => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+                <button className="vf-btn-save" onClick={handleEditSave}>✓ Save &amp; Continue</button>
+              </div>
+            ) : step === 'dateStartDate' || step === 'dateEndDate' ? (
+              <div className="vf-edit-area">
+                <input className="vf-input" type="date" value={editInput}
+                  onChange={e => setEditInput(e.target.value)} />
+                <button className="vf-btn-save" onClick={handleEditSave}>✓ Save &amp; Continue</button>
+              </div>
             ) : step === 'description' ? (
               <div className="vf-edit-area">
                 <textarea className="vf-input vf-textarea" rows={5}
@@ -313,7 +351,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
               </div>
             )
           ) : (
-            <div className="vf-field-value">{displayValue || <em className="vf-empty">Not set</em>}</div>
+            <div className="vf-field-value" style={{ whiteSpace: 'pre-wrap' }}>{displayValue || <em className="vf-empty">Not set</em>}</div>
           )}
         </div>
 
@@ -372,7 +410,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
           {editValues.description && (
             <div className="vf-preview-desc">
               <div className="vf-preview-key">📝 Description</div>
-              <div className="vf-preview-desc-text">{editValues.description}</div>
+              <div className="vf-preview-desc-text" style={{ whiteSpace: 'pre-wrap' }}>{editValues.description}</div>
             </div>
           )}
           {audioBlobRef.current && (
@@ -388,6 +426,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
         <div className="vf-preview-question">Ready to save this task?</div>
         <div className="vf-confirm-btns">
           <button className="vf-btn-yes" onClick={handlePreviewYes}>✅ Yes, Save Task</button>
+          <button className="vf-btn-edit" onClick={() => { setConfirmStep(0); setPhase('confirm') }}>✏️ Update</button>
           <button className="vf-btn-no" onClick={() => onCancel()}>🗑 No, Cancel</button>
         </div>
       </div>

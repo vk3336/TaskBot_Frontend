@@ -375,9 +375,23 @@ export default function App() {
       if (taskId && audioBlob) {
         try {
           const fd = new FormData()
-          const ext = audioBlob.type.includes('webm') ? 'webm' : 'audio'
+          // derive a proper extension from the MIME type
+          const mimeToExt = {
+            'audio/webm': 'webm',
+            'audio/webm;codecs=opus': 'webm',
+            'audio/ogg': 'ogg',
+            'audio/mp4': 'mp4',
+            'audio/mpeg': 'mp3',
+            'audio/wav': 'wav',
+            'audio/x-wav': 'wav',
+          }
+          const ext = mimeToExt[audioBlob.type] || audioBlob.type.split('/')[1]?.split(';')[0] || 'webm'
           fd.append('file', audioBlob, `voice-note.${ext}`)
-          await fetch(`${API}/${taskId}/attachment`, { method: 'POST', body: fd })
+          const attachRes = await fetch(`${API}/${taskId}/attachment`, { method: 'POST', body: fd })
+          if (!attachRes.ok) {
+            const errText = await attachRes.text().catch(() => '')
+            console.warn(`Attachment upload error: ${attachRes.status}`, errText)
+          }
         } catch (attachErr) {
           console.warn('Audio attachment upload failed (non-fatal):', attachErr.message)
         }
