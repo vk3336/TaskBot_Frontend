@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import VoiceTaskFlow from './VoiceTaskFlow.jsx'
 
-const API = import.meta.env.VITE_BACKEND       // http://localhost:3000/api/tasks
-const USERS_API = import.meta.env.VITE_USERS_API // http://localhost:3000/api/users
+const API = import.meta.env.VITE_BACKEND
+const USERS_API = import.meta.env.VITE_USERS_API
 
 /* ─── helpers ─────────────────────────────────────── */
 function getTime() {
@@ -24,14 +24,12 @@ async function fetchUsers() {
   const json = await res.json()
   return json.data || []
 }
-
 async function fetchAllTasks() {
   const res = await fetch(API)
   if (!res.ok) throw new Error(`Server error ${res.status}`)
   const json = await res.json()
   return json.data || []
 }
-
 async function fetchTasksByUser(username) {
   const res = await fetch(`${API}/${encodeURIComponent(username)}`)
   if (res.status === 404) return []
@@ -39,7 +37,6 @@ async function fetchTasksByUser(username) {
   const json = await res.json()
   return json.data || []
 }
-
 async function postTask(body) {
   const res = await fetch(API, {
     method: 'POST',
@@ -55,12 +52,10 @@ async function postTask(body) {
 
 /* ─── Sub-components ───────────────────────────────── */
 function TaskCard({ task }) {
-  // assignedUsersNames is a map { id: name, ... }
   const assigneeList = Object.values(task.assignedUsersNames || {})
   const assigneeDisplay = assigneeList.length > 0
     ? assigneeList.join(', ')
     : (task.assignedUserName || 'Unassigned')
-
   return (
     <div className="task-card">
       <div className="task-card-header">
@@ -73,9 +68,7 @@ function TaskCard({ task }) {
         {task.dateEnd && !task.dateEndDate && <span>📅 {task.dateEnd}</span>}
         {task.priority && <span>🔥 {task.priority}</span>}
       </div>
-      {task.description && (
-        <div className="task-desc">📝 {task.description}</div>
-      )}
+      {task.description && <div className="task-desc">📝 {task.description}</div>}
       {(task.attachmentsIds?.length > 0) && (
         <div className="task-meta" style={{ marginTop: '4px' }}>
           <span>📎 {task.attachmentsIds.length} attachment{task.attachmentsIds.length > 1 ? 's' : ''}</span>
@@ -85,7 +78,6 @@ function TaskCard({ task }) {
   )
 }
 
-// User list shown inside a chat bubble for "Tasks by User"
 function UserList({ users, onSelect }) {
   return (
     <div className="user-list">
@@ -102,14 +94,11 @@ function UserList({ users, onSelect }) {
   )
 }
 
-// Create task form inside a chat bubble
 function CreateTaskForm({ onSubmit, onCancel }) {
   const [form, setForm] = useState({
-    name: '', description: '',
-    priority: 'Normal',
+    name: '', description: '', priority: 'Normal',
     dateStartDate: '', dateEndDate: '',
-    assignedUsersIds: [],
-    assignedUsersNames: {},
+    assignedUsersIds: [], assignedUsersNames: {},
   })
   const [users, setUsers] = useState([])
   const [usersLoading, setUsersLoading] = useState(true)
@@ -117,14 +106,10 @@ function CreateTaskForm({ onSubmit, onCancel }) {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetchUsers()
-      .then(data => setUsers(data))
-      .catch(() => setUsers([]))
-      .finally(() => setUsersLoading(false))
+    fetchUsers().then(d => setUsers(d)).catch(() => setUsers([])).finally(() => setUsersLoading(false))
   }, [])
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
-
   const toggleUser = (userId, userName) => {
     setForm(prev => {
       const ids = prev.assignedUsersIds || []
@@ -145,8 +130,7 @@ function CreateTaskForm({ onSubmit, onCancel }) {
     setLoading(true); setError('')
     try {
       const payload = {
-        name: form.name,
-        priority: form.priority,
+        name: form.name, priority: form.priority,
         description: form.description || undefined,
         dateStartDate: form.dateStartDate || undefined,
         dateEndDate: form.dateEndDate || undefined,
@@ -155,15 +139,11 @@ function CreateTaskForm({ onSubmit, onCancel }) {
       }
       Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k])
       await onSubmit(payload)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
+    } catch (err) { setError(err.message) }
+    finally { setLoading(false) }
   }
 
   const assignedNames = Object.values(form.assignedUsersNames)
-
   return (
     <form className="create-form" onSubmit={handleSubmit}>
       <div className="form-row">
@@ -171,7 +151,6 @@ function CreateTaskForm({ onSubmit, onCancel }) {
         <input className="form-input" placeholder="e.g. Fix login bug" value={form.name}
           onChange={e => set('name', e.target.value)} />
       </div>
-
       <div className="form-row">
         <label>Assign To {assignedNames.length > 0 && <span style={{ color: 'var(--accent-light)', fontSize: '11px' }}>({assignedNames.join(', ')})</span>}</label>
         {usersLoading ? (
@@ -180,8 +159,7 @@ function CreateTaskForm({ onSubmit, onCancel }) {
           <div className="vf-user-checklist" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: '8px', padding: '6px' }}>
             {users.map(u => (
               <label key={u.id} className="vf-user-check-row">
-                <input type="checkbox"
-                  checked={(form.assignedUsersIds || []).includes(u.id)}
+                <input type="checkbox" checked={(form.assignedUsersIds || []).includes(u.id)}
                   onChange={() => toggleUser(u.id, u.name)} />
                 <span>{u.name}</span>
               </label>
@@ -189,14 +167,12 @@ function CreateTaskForm({ onSubmit, onCancel }) {
           </div>
         )}
       </div>
-
       <div className="form-row">
         <label>Priority</label>
         <select className="form-input" value={form.priority} onChange={e => set('priority', e.target.value)}>
           {['Low', 'Normal', 'High', 'Urgent'].map(p => <option key={p}>{p}</option>)}
         </select>
       </div>
-
       <div className="form-grid">
         <div className="form-row">
           <label>Start Date</label>
@@ -209,15 +185,12 @@ function CreateTaskForm({ onSubmit, onCancel }) {
             onChange={e => set('dateEndDate', e.target.value)} />
         </div>
       </div>
-
       <div className="form-row">
         <label>Description</label>
         <textarea className="form-input form-textarea" rows={2} placeholder="Optional description…"
           value={form.description} onChange={e => set('description', e.target.value)} />
       </div>
-
       {error && <div className="form-error">⚠️ {error}</div>}
-
       <div className="form-actions">
         <button type="button" className="form-btn cancel" onClick={onCancel}>Cancel</button>
         <button type="submit" className="form-btn submit" disabled={loading || usersLoading}>
@@ -228,7 +201,6 @@ function CreateTaskForm({ onSubmit, onCancel }) {
   )
 }
 
-// Renders a chat message
 function Message({ msg, onUserSelect, onCreateSubmit, onCreateCancel, onVoiceDone, onVoiceCancel }) {
   const isUser = msg.role === 'user'
   return (
@@ -240,32 +212,13 @@ function Message({ msg, onUserSelect, onCreateSubmit, onCreateCancel, onVoiceDon
       </div>
       <div className="message-content">
         <div className={`bubble ${isUser ? 'user' : 'ai'}`}>
-          {/* plain text */}
           {msg.content && <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>}
-
-          {/* task list */}
-          {msg.tasks && msg.tasks.length > 0 &&
-            msg.tasks.map(t => <TaskCard key={t.id} task={t} />)}
-          {msg.tasks && msg.tasks.length === 0 &&
-            <div className="empty-state">😕 No tasks found.</div>}
-
-          {/* user list */}
-          {msg.users &&
-            <UserList users={msg.users} onSelect={onUserSelect} />}
-
-          {/* create form */}
-          {msg.showForm &&
-            <CreateTaskForm onSubmit={onCreateSubmit} onCancel={onCreateCancel} />}
-
-          {/* voice task flow */}
-          {msg.showVoice &&
-            <VoiceTaskFlow onDone={(payload, blob) => onVoiceDone(payload, blob)} onCancel={onVoiceCancel} />}
-
-          {/* loading spinner */}
-          {msg.loading &&
-            <div className="bubble-loader">
-              <div className="typing-dot" /><div className="typing-dot" /><div className="typing-dot" />
-            </div>}
+          {msg.tasks && msg.tasks.length > 0 && msg.tasks.map(t => <TaskCard key={t.id} task={t} />)}
+          {msg.tasks && msg.tasks.length === 0 && <div className="empty-state">😕 No tasks found.</div>}
+          {msg.users && <UserList users={msg.users} onSelect={onUserSelect} />}
+          {msg.showForm && <CreateTaskForm onSubmit={onCreateSubmit} onCancel={onCreateCancel} />}
+          {msg.showVoice && <VoiceTaskFlow onDone={(payload, blob) => onVoiceDone(payload, blob)} onCancel={onVoiceCancel} />}
+          {msg.loading && <div className="bubble-loader"><div className="typing-dot" /><div className="typing-dot" /><div className="typing-dot" /></div>}
         </div>
         <span className="msg-time">{msg.time}</span>
       </div>
@@ -286,26 +239,76 @@ function TypingIndicator() {
   )
 }
 
-/* ─── QUICK ACTIONS & SUGGESTIONS ─────────────────── */
-const QUICK_ACTIONS = [
-  { label: '📋 All Tasks', action: 'allTasks' },
-  { label: '➕ Create Task', action: 'createTask' },
-  { label: '🎙 Voice Task', action: 'voiceTask' },
-  { label: '👤 Tasks by User', action: 'tasksByUser' },
+/* ─── SIDEBAR NAV ITEMS ─────────────────────────────── */
+const NAV_ITEMS = [
+  { icon: '📋', label: 'All Tasks',     desc: 'View every assigned task',         action: 'allTasks' },
+  { icon: '➕', label: 'Create Task',   desc: 'Add a new task to EspoCRM',         action: 'createTask' },
+  { icon: '🎙', label: 'Voice Task',    desc: 'Record voice & AI extracts details', action: 'voiceTask' },
+  { icon: '👤', label: 'Tasks by User', desc: 'Filter tasks by team member',        action: 'tasksByUser' },
 ]
 
 const SUGGESTIONS = [
-  { icon: '📋', title: 'View All Tasks', desc: 'See every task with its assignee and status', action: 'allTasks' },
-  { icon: '➕', title: 'Create a Task', desc: 'Add a new task and assign it to a team member', action: 'createTask' },
-  { icon: '🎙', title: 'Voice Task', desc: 'Record your voice or upload audio — AI extracts all task details', action: 'voiceTask' },
-  { icon: '👤', title: 'Tasks by User', desc: 'Pick a team member and see all their tasks', action: 'tasksByUser' },
+  { icon: '📋', title: 'View All Tasks',  desc: 'See every task with its assignee and status',                    action: 'allTasks' },
+  { icon: '➕', title: 'Create a Task',   desc: 'Add a new task and assign it to a team member',                  action: 'createTask' },
+  { icon: '🎙', title: 'Voice Task',      desc: 'Record your voice or upload audio — AI extracts all task details', action: 'voiceTask' },
+  { icon: '👤', title: 'Tasks by User',   desc: 'Pick a team member and see all their tasks',                     action: 'tasksByUser' },
 ]
+
+/* ─── SIDEBAR ───────────────────────────────────────── */
+function Sidebar({ open, onClose, onAction, onNewChat }) {
+  // Close sidebar on overlay click (mobile)
+  return (
+    <>
+      {/* Overlay — mobile only */}
+      {open && <div className="sidebar-overlay" onClick={onClose} />}
+
+      <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
+        {/* Logo / brand */}
+        <div className="sidebar-logo">
+          <div className="logo-icon">🤖</div>
+          <div>
+            <div className="logo-text">TaskBot AI</div>
+            <div className="logo-sub">EspoCRM Assistant</div>
+          </div>
+          {/* Close button — visible on mobile */}
+          <button className="sidebar-close-btn" onClick={onClose} aria-label="Close sidebar">✕</button>
+        </div>
+
+        {/* Nav actions */}
+        <nav className="sidebar-nav">
+          <div className="sidebar-nav-label">Quick Actions</div>
+          {NAV_ITEMS.map(item => (
+            <button
+              key={item.action}
+              className="sidebar-nav-item"
+              onClick={() => { onAction(item.action); onClose() }}
+            >
+              <span className="sidebar-nav-icon">{item.icon}</span>
+              <div className="sidebar-nav-text">
+                <span className="sidebar-nav-title">{item.label}</span>
+                <span className="sidebar-nav-desc">{item.desc}</span>
+              </div>
+            </button>
+          ))}
+        </nav>
+
+        {/* Bottom — new chat */}
+        <div className="sidebar-bottom">
+          <button className="new-chat-btn" onClick={() => { onNewChat(); onClose() }}>
+            <span>✨</span> New Chat
+          </button>
+        </div>
+      </aside>
+    </>
+  )
+}
 
 /* ─── MAIN APP ─────────────────────────────────────── */
 export default function App() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)
 
@@ -313,14 +316,12 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isTyping])
 
-  // Adds a message to the list; returns its id
   const addMsg = useCallback((msg) => {
     const id = Date.now() + Math.random()
     setMessages(prev => [...prev, { id, time: getTime(), ...msg }])
     return id
   }, [])
 
-  // Updates an existing message by id
   const updateMsg = useCallback((id, patch) => {
     setMessages(prev => prev.map(m => m.id === id ? { ...m, ...patch } : m))
   }, [])
@@ -332,13 +333,7 @@ export default function App() {
     try {
       const tasks = await fetchAllTasks()
       setIsTyping(false)
-      addMsg({
-        role: 'ai',
-        content: tasks.length > 0
-          ? `Here are all ${tasks.length} assigned tasks:`
-          : null,
-        tasks,
-      })
+      addMsg({ role: 'ai', content: tasks.length > 0 ? `Here are all ${tasks.length} assigned tasks:` : null, tasks })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Failed to fetch tasks: ${e.message}` })
@@ -347,61 +342,32 @@ export default function App() {
 
   const handleCreateTask = useCallback(() => {
     addMsg({ role: 'user', content: 'I want to create a new task' })
-    addMsg({
-      role: 'ai',
-      content: 'Sure! Fill in the details below:',
-      showForm: true,
-    })
+    addMsg({ role: 'ai', content: 'Sure! Fill in the details below:', showForm: true })
   }, [addMsg])
 
   const handleVoiceTask = useCallback(() => {
     addMsg({ role: 'user', content: '🎙 Create task from voice' })
-    addMsg({
-      role: 'ai',
-      content: 'Great! Record your voice note or upload an audio file. I\'ll extract all the task details and confirm each one with you before saving.',
-      showVoice: true,
-    })
+    addMsg({ role: 'ai', content: "Great! Record your voice note or upload an audio file. I'll extract all the task details and confirm each one with you before saving.", showVoice: true })
   }, [addMsg])
 
   const handleVoiceDone = useCallback(async (formData, audioBlob) => {
-    // hide the voice widget
     setMessages(prev => prev.map(m => m.showVoice ? { ...m, showVoice: false, content: 'Creating your task…' } : m))
     setIsTyping(true)
     try {
       const result = await postTask(formData)
       const taskId = result.data?.id
-
-      // Upload the audio recording as an attachment if we have both the task ID and the blob
       if (taskId && audioBlob) {
         try {
           const fd = new FormData()
-          // derive a proper extension from the MIME type
-          const mimeToExt = {
-            'audio/webm': 'webm',
-            'audio/webm;codecs=opus': 'webm',
-            'audio/ogg': 'ogg',
-            'audio/mp4': 'mp4',
-            'audio/mpeg': 'mp3',
-            'audio/wav': 'wav',
-            'audio/x-wav': 'wav',
-          }
+          const mimeToExt = { 'audio/webm': 'webm', 'audio/webm;codecs=opus': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'mp4', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav' }
           const ext = mimeToExt[audioBlob.type] || audioBlob.type.split('/')[1]?.split(';')[0] || 'webm'
           fd.append('file', audioBlob, `voice-note.${ext}`)
           const attachRes = await fetch(`${API}/${taskId}/attachment`, { method: 'POST', body: fd })
-          if (!attachRes.ok) {
-            const errText = await attachRes.text().catch(() => '')
-            console.warn(`Attachment upload error: ${attachRes.status}`, errText)
-          }
-        } catch (attachErr) {
-          console.warn('Audio attachment upload failed (non-fatal):', attachErr.message)
-        }
+          if (!attachRes.ok) console.warn(`Attachment upload error: ${attachRes.status}`)
+        } catch (attachErr) { console.warn('Audio attachment upload failed (non-fatal):', attachErr.message) }
       }
-
       setIsTyping(false)
-      addMsg({
-        role: 'ai',
-        content: `✅ Task "${formData.name}" has been created successfully in EspoCRM!${audioBlob && taskId ? '\n📎 Your voice recording has been attached to the task.' : ''}\n\nAssigned team member(s) can now see this task in their dashboard.`,
-      })
+      addMsg({ role: 'ai', content: `✅ Task "${formData.name}" has been created successfully in EspoCRM!${audioBlob && taskId ? '\n📎 Your voice recording has been attached to the task.' : ''}\n\nAssigned team member(s) can now see this task in their dashboard.` })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Failed to create task: ${e.message}` })
@@ -417,60 +383,42 @@ export default function App() {
     setIsTyping(true)
     try {
       const tasks = await fetchAllTasks()
-      // Extract unique user names from assignedUsersNames maps
       const nameSet = new Set()
       tasks.forEach(t => {
-        if (t.assignedUsersNames && typeof t.assignedUsersNames === 'object') {
+        if (t.assignedUsersNames && typeof t.assignedUsersNames === 'object')
           Object.values(t.assignedUsersNames).forEach(n => n && nameSet.add(n))
-        }
-        // fallback for legacy single-user field
         if (t.assignedUserName) nameSet.add(t.assignedUserName)
       })
       const users = [...nameSet].sort()
       setIsTyping(false)
-      if (users.length === 0) {
-        addMsg({ role: 'ai', content: 'No assigned users found in the task list.' })
-      } else {
-        addMsg({ role: 'ai', content: null, users })
-      }
+      if (users.length === 0) addMsg({ role: 'ai', content: 'No assigned users found in the task list.' })
+      else addMsg({ role: 'ai', content: null, users })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Failed to fetch users: ${e.message}` })
     }
   }, [addMsg])
 
-  // Called when user clicks a name in UserList
   const handleUserSelect = useCallback(async (username) => {
     addMsg({ role: 'user', content: `Show tasks for ${username}` })
     setIsTyping(true)
     try {
       const tasks = await fetchTasksByUser(username)
       setIsTyping(false)
-      addMsg({
-        role: 'ai',
-        content: tasks.length > 0
-          ? `Here are ${tasks.length} task(s) assigned to ${username}:`
-          : null,
-        tasks,
-      })
+      addMsg({ role: 'ai', content: tasks.length > 0 ? `Here are ${tasks.length} task(s) assigned to ${username}:` : null, tasks })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Could not fetch tasks: ${e.message}` })
     }
   }, [addMsg])
 
-  // Called when create-task form is submitted
   const handleCreateSubmit = useCallback(async (formData) => {
-    // find the form message and hide it
     setMessages(prev => prev.map(m => m.showForm ? { ...m, showForm: false, content: 'Creating your task…' } : m))
     setIsTyping(true)
     try {
       await postTask(formData)
       setIsTyping(false)
-      addMsg({
-        role: 'ai',
-        content: `✅ Task "${formData.name}" created successfully in EspoCRM!`,
-      })
+      addMsg({ role: 'ai', content: `✅ Task "${formData.name}" created successfully in EspoCRM!` })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Failed to create task: ${e.message}` })
@@ -481,28 +429,21 @@ export default function App() {
     setMessages(prev => prev.map(m => m.showForm ? { ...m, showForm: false, content: 'Task creation cancelled.' } : m))
   }, [])
 
-  // Text input send — basic keyword routing
   const handleSend = useCallback((text) => {
     const content = (text || input).trim()
     if (!content) return
     setInput('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-
     const lower = content.toLowerCase()
     if (lower.match(/\b(all|show|list|view)\b.*task/)) { handleAllTasks(); return }
     if (lower.match(/\b(voice|audio|record|speak)\b.*task/) || lower.match(/task.*\b(voice|audio|record)\b/)) { handleVoiceTask(); return }
     if (lower.match(/\b(create|add|new|make)\b.*task/)) { handleCreateTask(); return }
     if (lower.match(/task.*\b(by|per|for)\b.*user/) || lower.match(/\buser\b.*task/)) { handleTasksByUser(); return }
-
-    // fallback
     addMsg({ role: 'user', content })
     setIsTyping(true)
     setTimeout(() => {
       setIsTyping(false)
-      addMsg({
-        role: 'ai',
-        content: "I can help you with:\n• 📋 View all tasks\n• ➕ Create a task\n• 🎙 Voice task (record or upload audio)\n• 👤 Tasks by user\n\nUse the quick buttons above or just ask!",
-      })
+      addMsg({ role: 'ai', content: "I can help you with:\n• 📋 View all tasks\n• ➕ Create a task\n• 🎙 Voice task (record or upload audio)\n• 👤 Tasks by user\n\nTap the menu icon or just ask!" })
     }, 600)
   }, [input, addMsg, handleAllTasks, handleCreateTask, handleVoiceTask, handleTasksByUser])
 
@@ -525,11 +466,32 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* ── Sidebar ── */}
+      <Sidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onAction={handleAction}
+        onNewChat={() => setMessages([])}
+      />
+
       {/* ── Chat area ── */}
       <main className="chat-area">
+        {/* Header — always visible */}
         <header className="chat-header">
           <div className="chat-header-left">
-            <div className="ai-avatar"><img src="/chat.png" alt="TaskBot" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /></div>
+            {/* Hamburger / toggle button */}
+            <button
+              className="hamburger-btn"
+              onClick={() => setSidebarOpen(o => !o)}
+              aria-label="Toggle sidebar"
+            >
+              <span className={`hamburger-icon ${sidebarOpen ? 'open' : ''}`}>
+                <span /><span /><span />
+              </span>
+            </button>
+            <div className="ai-avatar">
+              <img src="/chat.png" alt="TaskBot" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+            </div>
             <div>
               <div className="chat-title">TaskBot AI</div>
               <div className="chat-subtitle">Online · Ready to assist</div>
@@ -551,7 +513,9 @@ export default function App() {
         <div className="messages-container">
           {messages.length === 0 ? (
             <div className="welcome-screen">
-              <div className="welcome-icon"><img src="/chat.png" alt="TaskBot" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} /></div>
+              <div className="welcome-icon">
+                <img src="/chat.png" alt="TaskBot" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+              </div>
               <div>
                 <h1 className="welcome-title">Hi, I'm TaskBot AI</h1>
                 <p className="welcome-subtitle">
@@ -588,31 +552,20 @@ export default function App() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input area */}
+        {/* Input area — no quick-actions row */}
         <div className="input-area">
-          <div className="quick-actions">
-            {QUICK_ACTIONS.map(qa => (
-              <button key={qa.label} className="quick-btn" onClick={() => handleAction(qa.action)}>
-                {qa.label}
-              </button>
-            ))}
-          </div>
           <div className="input-box">
             <textarea
               ref={textareaRef}
               className="chat-input"
-              placeholder="Ask me about tasks, or use the quick buttons above…"
+              placeholder="Ask me about tasks, or open the menu…"
               value={input}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               rows={1}
             />
             <div className="input-actions">
-              <button
-                className="voice-btn"
-                title="Create task from voice"
-                onClick={() => handleVoiceTask()}
-              >🎙</button>
+              <button className="voice-btn" title="Create task from voice" onClick={() => handleVoiceTask()}>🎙</button>
               <button className="send-btn" onClick={() => handleSend()} disabled={!input.trim() || isTyping}>➤</button>
             </div>
           </div>
