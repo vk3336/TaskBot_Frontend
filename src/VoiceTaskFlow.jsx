@@ -5,6 +5,7 @@ const USERS_API = import.meta.env.VITE_USERS_API
 
 /* ── helpers ── */
 async function fetchUsers() {
+  if (!USERS_API) throw new Error('VITE_USERS_API is not set in .env.local')
   const res = await fetch(USERS_API)
   if (!res.ok) throw new Error(`Server error ${res.status}`)
   const json = await res.json()
@@ -26,6 +27,22 @@ async function transcribeAudio(audioBlob) {
   }
   const data = await res.json()
   return data.text || ''
+}
+
+/* ── Fix #8: strip markdown code fences before parsing, with a safe fallback ── */
+function safeParseJSON(raw) {
+  // Strip ```json ... ``` or ``` ... ``` fences if present
+  const stripped = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+  try {
+    return JSON.parse(stripped)
+  } catch {
+    // Try to extract the first {...} block from the response
+    const match = stripped.match(/\{[\s\S]*\}/)
+    if (match) {
+      try { return JSON.parse(match[0]) } catch { /* fall through */ }
+    }
+    return null
+  }
 }
 
 async function extractTaskFields(transcript, users) {
@@ -84,7 +101,9 @@ Rules:
   }
   const data = await res.json()
   const raw = data.choices?.[0]?.message?.content || '{}'
-  return JSON.parse(raw)
+  const parsed = safeParseJSON(raw)
+  if (!parsed) throw new Error('AI returned an unreadable response. Please try again.')
+  return parsed
 }
 
 /* ── Step labels ── */
@@ -105,8 +124,8 @@ function getAssigneeDisplay(editValues) {
   return names.length > 0 ? names.join(', ') : 'Unassigned'
 }
 
-/* ── Recording hook ── */
-function useRecorder() {
+/* ── Fix #7: recording hook with error handling ── */
+function useRecorder(onError) {
   const [recording, setRecording] = useState(false)
   const [audioBlob, setAudioBlob] = useState(null)
   const [audioURL, setAudioURL] = useState(null)
@@ -117,20 +136,30 @@ function useRecorder() {
     chunksRef.current = []
     setAudioBlob(null)
     setAudioURL(null)
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus' : 'audio/webm'
-    const mr = new MediaRecorder(stream, { mimeType })
-    mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-    mr.onstop = () => {
-      const blob = new Blob(chunksRef.current, { type: mimeType })
-      setAudioBlob(blob)
-      setAudioURL(URL.createObjectURL(blob))
-      stream.getTracks().forEach(t => t.stop())
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus' : 'audio/webm'
+      const mr = new MediaRecorder(stream, { mimeType })
+      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mimeType })
+        setAudioBlob(blob)
+        setAudioURL(URL.createObjectURL(blob))
+        stream.getTracks().forEach(t => t.stop())
+      }
+      mr.start()
+      mediaRef.current = mr
+      setRecording(true)
+    } catch (err) {
+      // Permission denied, insecure context, or unsupported browser
+      const msg = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError'
+        ? 'Microphone access was denied. Please allow microphone permission and try again.'
+        : err.name === 'NotFoundError'
+        ? 'No microphone found. Please connect a microphone and try again.'
+        : `Could not start recording: ${err.message}`
+      onError(msg)
     }
-    mr.start()
-    mediaRef.current = mr
-    setRecording(true)
   }
 
   const stop = () => { mediaRef.current?.stop(); setRecording(false) }
@@ -143,29 +172,35 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   const [phase, setPhase] = useState('record')
   const [error, setError] = useState('')
   const [users, setUsers] = useState([])
+  const [usersLoading, setUsersLoading] = useState(true)
   const [confirmStep, setConfirmStep] = useState(0)
   const [editValues, setEditValues] = useState({})
   const [transcript, setTranscript] = useState('')
   const [editMode, setEditMode] = useState(false)
   const [editInput, setEditInput] = useState('')
-  // store the audio blob so we can pass it to onDone for attachment upload
+  // Fix #2: track audio presence in state so JSX reads state, not ref directly
+  const [hasAudio, setHasAudio] = useState(false)
   const audioBlobRef = useRef(null)
   const fileInputRef = useRef(null)
   const prevBlobRef = useRef(null)
-  const { recording, audioBlob, audioURL, start, stop } = useRecorder()
+  const { recording, audioBlob, audioURL, start, stop } = useRecorder(setError)
 
   useEffect(() => {
-    fetchUsers().then(setUsers).catch(() => setUsers([]))
+    fetchUsers()
+      .then(d => { setUsers(d); setUsersLoading(false) })
+      .catch(err => { setError(`Failed to load users: ${err.message}`); setUsersLoading(false) })
   }, [])
 
-  const processAudio = async (blob) => {
+  // Fix #5: pass users as argument to processAudio so it never closes over stale state
+  const processAudio = async (blob, currentUsers) => {
     audioBlobRef.current = blob
+    setHasAudio(true)
     setPhase('processing')
     setError('')
     try {
       const text = await transcribeAudio(blob)
       setTranscript(text)
-      const extracted = await extractTaskFields(text, users)
+      const extracted = await extractTaskFields(text, currentUsers)
       setEditValues({
         name: extracted.name || '',
         assignedUsersIds: extracted.assignedUsersIds || [],
@@ -185,15 +220,16 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0]
-    if (file) processAudio(file)
+    if (file) processAudio(file, users)
   }
 
+  // Fix #5: include users in dependency array so this never runs with a stale users list
   useEffect(() => {
-    if (audioBlob && audioBlob !== prevBlobRef.current) {
+    if (audioBlob && audioBlob !== prevBlobRef.current && !usersLoading) {
       prevBlobRef.current = audioBlob
-      processAudio(audioBlob)
+      processAudio(audioBlob, users)
     }
-  }, [audioBlob])
+  }, [audioBlob, users, usersLoading])
 
   /* Toggle a user in/out of assigned lists */
   const toggleAssignee = (userId, userName) => {
@@ -230,10 +266,17 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     else setPhase('preview')
   }
 
+  // Fix #6: validate task name before submitting
   const handlePreviewYes = () => {
+    if (!editValues.name?.trim()) {
+      setError('Task name is required. Please go back and set a name.')
+      setConfirmStep(0)
+      setPhase('confirm')
+      return
+    }
     setPhase('saving')
     const payload = {
-      name: editValues.name,
+      name: editValues.name.trim(),
       assignedUsersIds: editValues.assignedUsersIds?.length > 0 ? editValues.assignedUsersIds : undefined,
       assignedUsersNames: Object.keys(editValues.assignedUsersNames || {}).length > 0
         ? editValues.assignedUsersNames : undefined,
@@ -302,6 +345,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
             <span className="vf-transcript-text">"{transcript}"</span>
           </div>
         )}
+
+        {error && <div className="vf-error">⚠️ {error}</div>}
 
         <div className="vf-field-card">
           <div className="vf-field-label">{label}</div>
@@ -413,7 +458,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
               <div className="vf-preview-desc-text" style={{ whiteSpace: 'pre-wrap' }}>{editValues.description}</div>
             </div>
           )}
-          {audioBlobRef.current && (
+          {/* Fix #2: use hasAudio state instead of audioBlobRef.current in render */}
+          {hasAudio && (
             <div className="vf-preview-row">
               <span className="vf-preview-key">📎 Voice Recording</span>
               <span className="vf-preview-val" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
@@ -448,15 +494,22 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
       {error && <div className="vf-error">⚠️ {error}</div>}
 
+      {usersLoading && (
+        <div className="vf-error" style={{ background: 'rgba(255,255,255,0.05)', borderColor: 'var(--border)' }}>
+          ⏳ Loading team members… Voice recording will start processing once they are ready.
+        </div>
+      )}
+
       <div className="vf-record-area">
         <button
           className={`vf-record-btn ${recording ? 'recording' : ''}`}
           onClick={recording ? stop : start}
+          disabled={usersLoading}
         >
           {recording ? (
             <><span className="vf-rec-dot" /><span>Stop Recording</span></>
           ) : (
-            <><span>🎤</span><span>Start Recording</span></>
+            <><span>🎤</span><span>{usersLoading ? 'Loading…' : 'Start Recording'}</span></>
           )}
         </button>
 
@@ -469,8 +522,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
         <div className="vf-divider"><span>or</span></div>
 
-        <button className="vf-upload-btn" onClick={() => fileInputRef.current?.click()}>
-          📁 Upload Audio File
+        <button className="vf-upload-btn" onClick={() => fileInputRef.current?.click()} disabled={usersLoading}>
+          📁 {usersLoading ? 'Loading…' : 'Upload Audio File'}
         </button>
         <input ref={fileInputRef} type="file" accept="audio/*"
           style={{ display: 'none' }} onChange={handleFileUpload} />

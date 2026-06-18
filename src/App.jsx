@@ -4,6 +4,10 @@ import VoiceTaskFlow from './VoiceTaskFlow.jsx'
 const API = import.meta.env.VITE_BACKEND
 const USERS_API = import.meta.env.VITE_USERS_API
 
+/* ── env guard — fail loudly at startup instead of silently at runtime ── */
+if (!API) console.error('[TaskBot] VITE_BACKEND is not set. Task API calls will fail. Check your .env.local file.')
+if (!USERS_API) console.error('[TaskBot] VITE_USERS_API is not set. User loading will fail. Check your .env.local file.')
+
 /* ─── helpers ─────────────────────────────────────── */
 function getTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -106,7 +110,10 @@ function CreateTaskForm({ onSubmit, onCancel }) {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetchUsers().then(d => setUsers(d)).catch(() => setUsers([])).finally(() => setUsersLoading(false))
+    fetchUsers()
+      .then(d => setUsers(d))
+      .catch(err => { setError(`Failed to load users: ${err.message}`); setUsers([]) })
+      .finally(() => setUsersLoading(false))
   }, [])
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
@@ -315,6 +322,7 @@ export default function App() {
   const textareaRef = useRef(null)
 
   useEffect(() => {
+    if (messages.length === 0) return
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isTyping])
 
@@ -322,10 +330,6 @@ export default function App() {
     const id = Date.now() + Math.random()
     setMessages(prev => [...prev, { id, time: getTime(), ...msg }])
     return id
-  }, [])
-
-  const updateMsg = useCallback((id, patch) => {
-    setMessages(prev => prev.map(m => m.id === id ? { ...m, ...patch } : m))
   }, [])
 
   /* ── action handlers ── */
