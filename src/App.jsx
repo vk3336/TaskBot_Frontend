@@ -513,9 +513,6 @@ export default function App() {
         <div className="messages-container">
           {messages.length === 0 ? (
             <div className="welcome-screen">
-              <div className="welcome-icon">
-                <img src="/chat.png" alt="TaskBot" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
-              </div>
               <div>
                 <h1 className="welcome-title">Hi, I'm TaskBot AI</h1>
                 <p className="welcome-subtitle">
