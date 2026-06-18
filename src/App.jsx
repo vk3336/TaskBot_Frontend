@@ -36,10 +36,9 @@ async function fetchAllTasks() {
   const json = await res.json()
   return json.data || []
 }
-async function fetchTasksByUser(username) {
+async function fetchTasksByUser(userId) {
   if (!API) throw new Error('VITE_BACKEND is not configured. Add it to your .env.local file.')
-  const res = await fetch(`${API}/${encodeURIComponent(username)}`)
-  if (res.status === 404) return []
+  const res = await fetch(`${API}/user/${encodeURIComponent(userId)}`)
   if (!res.ok) throw new Error(`Server error ${res.status}`)
   const json = await res.json()
   return json.data || []
@@ -92,9 +91,9 @@ function UserList({ users, onSelect }) {
       <p className="user-list-title">Select a team member to view their tasks:</p>
       <div className="user-chips">
         {users.map(u => (
-          <button key={u} className="user-chip" onClick={() => onSelect(u)}>
-            <span className="chip-avatar">{initials(u)}</span>
-            <span>{u}</span>
+          <button key={u.id} className="user-chip" onClick={() => onSelect(u)}>
+            <span className="chip-avatar">{initials(u.name)}</span>
+            <span>{u.name}</span>
           </button>
         ))}
       </div>
@@ -393,13 +392,19 @@ export default function App() {
     setIsTyping(true)
     try {
       const tasks = await fetchAllTasks()
-      const nameSet = new Set()
+      // Build a deduplicated list of { id, name } objects from assignedUsersNames
+      // Using a Map keyed by user ID guarantees uniqueness even if a name appears twice
+      const userMap = new Map()
       tasks.forEach(t => {
-        if (t.assignedUsersNames && typeof t.assignedUsersNames === 'object')
-          Object.values(t.assignedUsersNames).forEach(n => n && nameSet.add(n))
-        if (t.assignedUserName) nameSet.add(t.assignedUserName)
+        if (t.assignedUsersNames && typeof t.assignedUsersNames === 'object') {
+          Object.entries(t.assignedUsersNames).forEach(([id, name]) => {
+            if (id && name) userMap.set(id, name)
+          })
+        }
       })
-      const users = [...nameSet].sort()
+      const users = [...userMap.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name))
       setIsTyping(false)
       if (users.length === 0) addMsg({ role: 'ai', content: 'No assigned users found in the task list.' })
       else addMsg({ role: 'ai', content: null, users })
@@ -409,13 +414,13 @@ export default function App() {
     }
   }, [addMsg])
 
-  const handleUserSelect = useCallback(async (username) => {
-    addMsg({ role: 'user', content: `Show tasks for ${username}` })
+  const handleUserSelect = useCallback(async (user) => {
+    addMsg({ role: 'user', content: `Show tasks for ${user.name}` })
     setIsTyping(true)
     try {
-      const tasks = await fetchTasksByUser(username)
+      const tasks = await fetchTasksByUser(user.id)
       setIsTyping(false)
-      addMsg({ role: 'ai', content: tasks.length > 0 ? `Here are ${tasks.length} task(s) assigned to ${username}:` : null, tasks })
+      addMsg({ role: 'ai', content: tasks.length > 0 ? `Here are ${tasks.length} task(s) assigned to ${user.name}:` : `No tasks found for ${user.name}.`, tasks: tasks.length > 0 ? tasks : undefined })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Could not fetch tasks: ${e.message}` })
