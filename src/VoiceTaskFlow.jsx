@@ -13,6 +13,7 @@ async function fetchUsers() {
 }
 
 async function transcribeAudio(audioBlob) {
+  if (!OPENAI_KEY) throw new Error('VITE_CHATGPT_KEY is not configured. Add it to your .env.local file.')
   const formData = new FormData()
   formData.append('file', audioBlob, 'recording.webm')
   formData.append('model', 'whisper-1')
@@ -46,6 +47,7 @@ function safeParseJSON(raw) {
 }
 
 async function extractTaskFields(transcript, users) {
+  if (!OPENAI_KEY) throw new Error('VITE_CHATGPT_KEY is not configured. Add it to your .env.local file.')
   const userList = users.map(u => `• ${u.name} (id: ${u.id})`).join('\n')
   const systemPrompt = `You are an intelligent task extraction assistant for a project management tool.
 Your job is to extract task details from a voice note transcript and rewrite the description in a rich, well-formatted, professional style using emojis, bullet points, and clear sections.

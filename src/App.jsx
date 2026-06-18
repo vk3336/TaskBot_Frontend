@@ -23,18 +23,21 @@ function initials(name) {
 
 /* ─── API calls ────────────────────────────────────── */
 async function fetchUsers() {
+  if (!USERS_API) throw new Error('VITE_USERS_API is not configured. Add it to your .env.local file.')
   const res = await fetch(USERS_API)
   if (!res.ok) throw new Error(`Server error ${res.status}`)
   const json = await res.json()
   return json.data || []
 }
 async function fetchAllTasks() {
+  if (!API) throw new Error('VITE_BACKEND is not configured. Add it to your .env.local file.')
   const res = await fetch(API)
   if (!res.ok) throw new Error(`Server error ${res.status}`)
   const json = await res.json()
   return json.data || []
 }
 async function fetchTasksByUser(username) {
+  if (!API) throw new Error('VITE_BACKEND is not configured. Add it to your .env.local file.')
   const res = await fetch(`${API}/${encodeURIComponent(username)}`)
   if (res.status === 404) return []
   if (!res.ok) throw new Error(`Server error ${res.status}`)
@@ -42,6 +45,7 @@ async function fetchTasksByUser(username) {
   return json.data || []
 }
 async function postTask(body) {
+  if (!API) throw new Error('VITE_BACKEND is not configured. Add it to your .env.local file.')
   const res = await fetch(API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -419,14 +423,17 @@ export default function App() {
   }, [addMsg])
 
   const handleCreateSubmit = useCallback(async (formData) => {
-    setMessages(prev => prev.map(m => m.showForm ? { ...m, showForm: false, content: 'Creating your task…' } : m))
+    // Keep the form visible while the request is in flight so the user
+    // doesn't lose their data if the POST fails. Only hide it on success.
     setIsTyping(true)
     try {
       await postTask(formData)
+      // Success — now replace the form with the confirmation message
+      setMessages(prev => prev.map(m => m.showForm ? { ...m, showForm: false, content: `✅ Task "${formData.name}" created successfully in EspoCRM!` } : m))
       setIsTyping(false)
-      addMsg({ role: 'ai', content: `✅ Task "${formData.name}" created successfully in EspoCRM!` })
     } catch (e) {
       setIsTyping(false)
+      // Leave the form intact — only show the error inside the form via a new ai message
       addMsg({ role: 'ai', content: `❌ Failed to create task: ${e.message}` })
     }
   }, [addMsg])
