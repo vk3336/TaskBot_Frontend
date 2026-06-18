@@ -265,7 +265,9 @@ function Sidebar({ open, onClose, onAction, onNewChat }) {
       <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
         {/* Logo / brand */}
         <div className="sidebar-logo">
-          <div className="logo-icon">🤖</div>
+          <div className="logo-icon">
+            <img src="/chat.png" alt="TaskBot" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '10px' }} />
+          </div>
           <div>
             <div className="logo-text">TaskBot AI</div>
             <div className="logo-sub">EspoCRM Assistant</div>
