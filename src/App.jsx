@@ -365,18 +365,40 @@ export default function App() {
     try {
       const result = await postTask(formData)
       const taskId = result.data?.id
+
+      let audioAttached = false
       if (taskId && audioBlob) {
         try {
           const fd = new FormData()
-          const mimeToExt = { 'audio/webm': 'webm', 'audio/webm;codecs=opus': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'mp4', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav' }
-          const ext = mimeToExt[audioBlob.type] || audioBlob.type.split('/')[1]?.split(';')[0] || 'webm'
-          fd.append('file', audioBlob, `voice-note.${ext}`)
+          // Blob is always audio/mp3 after conversion in VoiceTaskFlow — use fixed clean filename
+          const rawMime = (audioBlob.type || '').toLowerCase()
+          const baseMime = rawMime.split(';')[0].trim()
+          const mimeToExt = {
+            'audio/mp3': 'mp3', 'audio/mpeg': 'mp3',
+            'audio/webm': 'webm', 'audio/ogg': 'ogg',
+            'audio/mp4': 'mp4', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
+            'audio/aac': 'aac', 'audio/flac': 'flac',
+          }
+          const ext = mimeToExt[baseMime] || 'mp3'
+          const cleanBlob = new Blob([audioBlob], { type: baseMime || 'audio/mp3' })
+          fd.append('file', cleanBlob, `voice-note.${ext}`)
           const attachRes = await fetch(`${API}/${taskId}/attachment`, { method: 'POST', body: fd })
-          if (!attachRes.ok) console.warn(`Attachment upload error: ${attachRes.status}`)
-        } catch (attachErr) { console.warn('Audio attachment upload failed (non-fatal):', attachErr.message) }
+          if (attachRes.ok) {
+            audioAttached = true
+          } else {
+            const errBody = await attachRes.json().catch(() => ({}))
+            console.warn('Attachment upload failed:', attachRes.status, errBody)
+          }
+        } catch (attachErr) {
+          console.warn('Audio attachment upload failed (non-fatal):', attachErr.message)
+        }
       }
+
       setIsTyping(false)
-      addMsg({ role: 'ai', content: `✅ Task "${formData.name}" has been created successfully in EspoCRM!${audioBlob && taskId ? '\n📎 Your voice recording has been attached to the task.' : ''}\n\nAssigned team member(s) can now see this task in their dashboard.` })
+      addMsg({
+        role: 'ai',
+        content: `✅ Task "${formData.name}" has been created successfully in EspoCRM!${audioAttached ? '\n📎 Your voice recording (MP3) has been attached to the task.' : ''}\n\nAssigned team member(s) can now see this task in their dashboard.`,
+      })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Failed to create task: ${e.message}` })

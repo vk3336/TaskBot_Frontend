@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import lamejs from 'lamejs'
 
 const OPENAI_KEY = import.meta.env.VITE_CHATGPT_KEY
 const USERS_API = import.meta.env.VITE_USERS_API
@@ -159,11 +160,58 @@ function getAssigneeDisplay(editValues) {
   return names.length > 0 ? names.join(', ') : 'Unassigned'
 }
 
-/* ── Fix #7: recording hook with error handling ── */
+/* ── Convert any audio blob → MP3 blob using AudioContext + lamejs ── */
+async function convertToMp3(blob) {
+  const arrayBuffer = await blob.arrayBuffer()
+  const audioCtx = new AudioContext()
+  const decoded = await audioCtx.decodeAudioData(arrayBuffer)
+  await audioCtx.close()
+
+  const numChannels = decoded.numberOfChannels
+  const sampleRate = decoded.sampleRate
+  const kbps = 128
+
+  const mp3enc = new lamejs.Mp3Encoder(numChannels, sampleRate, kbps)
+  const mp3Data = []
+
+  const BLOCK = 1152 // samples per lamejs frame
+  const left = decoded.getChannelData(0)
+  const right = numChannels > 1 ? decoded.getChannelData(1) : left
+
+  // lamejs expects Int16 PCM — convert Float32 → Int16
+  const toInt16 = (f32) => {
+    const i16 = new Int16Array(f32.length)
+    for (let i = 0; i < f32.length; i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]))
+      i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    return i16
+  }
+
+  const leftInt = toInt16(left)
+  const rightInt = toInt16(right)
+
+  for (let i = 0; i < leftInt.length; i += BLOCK) {
+    const lChunk = leftInt.subarray(i, i + BLOCK)
+    const rChunk = rightInt.subarray(i, i + BLOCK)
+    const encoded = numChannels > 1
+      ? mp3enc.encodeBuffer(lChunk, rChunk)
+      : mp3enc.encodeBuffer(lChunk)
+    if (encoded.length > 0) mp3Data.push(new Int8Array(encoded))
+  }
+
+  const flushed = mp3enc.flush()
+  if (flushed.length > 0) mp3Data.push(new Int8Array(flushed))
+
+  return new Blob(mp3Data, { type: 'audio/mp3' })
+}
+
+/* ── Recording hook — records webm, converts to MP3 on stop ── */
 function useRecorder(onError) {
   const [recording, setRecording] = useState(false)
   const [audioBlob, setAudioBlob] = useState(null)
   const [audioURL, setAudioURL] = useState(null)
+  const [converting, setConverting] = useState(false)
   const mediaRef = useRef(null)
   const chunksRef = useRef([])
 
@@ -177,17 +225,27 @@ function useRecorder(onError) {
         ? 'audio/webm;codecs=opus' : 'audio/webm'
       const mr = new MediaRecorder(stream, { mimeType })
       mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data) }
-      mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType })
-        setAudioBlob(blob)
-        setAudioURL(URL.createObjectURL(blob))
+      mr.onstop = async () => {
         stream.getTracks().forEach(t => t.stop())
+        const rawBlob = new Blob(chunksRef.current, { type: mimeType })
+        setConverting(true)
+        try {
+          const mp3Blob = await convertToMp3(rawBlob)
+          setAudioBlob(mp3Blob)
+          setAudioURL(URL.createObjectURL(mp3Blob))
+        } catch (convErr) {
+          // Conversion failed — fall back to the original webm blob so recording still works
+          console.warn('MP3 conversion failed, using original format:', convErr.message)
+          setAudioBlob(rawBlob)
+          setAudioURL(URL.createObjectURL(rawBlob))
+        } finally {
+          setConverting(false)
+        }
       }
       mr.start()
       mediaRef.current = mr
       setRecording(true)
     } catch (err) {
-      // Permission denied, insecure context, or unsupported browser
       const msg = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError'
         ? 'Microphone access was denied. Please allow microphone permission and try again.'
         : err.name === 'NotFoundError'
@@ -199,7 +257,7 @@ function useRecorder(onError) {
 
   const stop = () => { mediaRef.current?.stop(); setRecording(false) }
 
-  return { recording, audioBlob, audioURL, start, stop }
+  return { recording, audioBlob, audioURL, converting, start, stop }
 }
 
 /* ── Main VoiceTaskFlow component ── */
@@ -218,7 +276,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   const audioBlobRef = useRef(null)
   const fileInputRef = useRef(null)
   const prevBlobRef = useRef(null)
-  const { recording, audioBlob, audioURL, start, stop } = useRecorder(setError)
+  const { recording, audioBlob, audioURL, converting, start, stop } = useRecorder(setError)
 
   useEffect(() => {
     fetchUsers()
@@ -257,9 +315,21 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     }
   }
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0]
-    if (file) processAudio(file, users)
+    if (!file) return
+    // If user uploads a non-mp3, convert it first
+    if (file.type !== 'audio/mp3' && file.type !== 'audio/mpeg') {
+      try {
+        const mp3Blob = await convertToMp3(file)
+        processAudio(mp3Blob, users)
+      } catch {
+        // Conversion failed — send original, backend will still store it
+        processAudio(file, users)
+      }
+    } else {
+      processAudio(file, users)
+    }
   }
 
   // Fix #5: include users in dependency array so this never runs with a stale users list
@@ -543,10 +613,12 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
         <button
           className={`vf-record-btn ${recording ? 'recording' : ''}`}
           onClick={recording ? stop : start}
-          disabled={usersLoading}
+          disabled={usersLoading || converting}
         >
           {recording ? (
             <><span className="vf-rec-dot" /><span>Stop Recording</span></>
+          ) : converting ? (
+            <><span className="vf-rec-dot" style={{ animationDuration: '0.6s' }} /><span>Converting to MP3…</span></>
           ) : (
             <><span>🎤</span><span>{usersLoading ? 'Loading…' : 'Start Recording'}</span></>
           )}
@@ -561,7 +633,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
         <div className="vf-divider"><span>or</span></div>
 
-        <button className="vf-upload-btn" onClick={() => fileInputRef.current?.click()} disabled={usersLoading}>
+        <button className="vf-upload-btn" onClick={() => fileInputRef.current?.click()} disabled={usersLoading || converting}>
           📁 {usersLoading ? 'Loading…' : 'Upload Audio File'}
         </button>
         <input ref={fileInputRef} type="file" accept="audio/*"
