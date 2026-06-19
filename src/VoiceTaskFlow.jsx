@@ -46,6 +46,33 @@ function safeParseJSON(raw) {
   }
 }
 
+/* ── Validate that the transcript has enough content to be a real task ── */
+function validateTranscript(text) {
+  if (!text || !text.trim()) {
+    throw new Error('No speech detected in the recording. Please record again with a clear voice note describing the task.')
+  }
+  const words = text.trim().split(/\s+/).filter(Boolean)
+  if (words.length < 3) {
+    throw new Error(`The recording was too short or unclear ("${text.trim()}"). Please record a proper task description.`)
+  }
+  return text.trim()
+}
+
+/* ── Validate that extracted user IDs all exist in the known users list ── */
+function validateAssignedUsers(extracted, users) {
+  const ids = extracted.assignedUsersIds || []
+  if (ids.length === 0) return // unassigned is fine
+
+  const validIds = new Set(users.map(u => u.id))
+  const invalid = ids.filter(id => !validIds.has(id))
+  if (invalid.length > 0) {
+    // Try to show names if GPT returned them so the error is readable
+    const names = extracted.assignedUsersNames || {}
+    const invalidLabels = invalid.map(id => names[id] || id).join(', ')
+    throw new Error(`Assigned user(s) not found in your team: "${invalidLabels}". Please re-record and mention a valid team member name.`)
+  }
+}
+
 async function extractTaskFields(transcript, users) {
   if (!OPENAI_KEY) throw new Error('VITE_CHATGPT_KEY is not configured. Add it to your .env.local file.')
   const userList = users.map(u => `• ${u.name} (id: ${u.id})`).join('\n')
@@ -200,9 +227,13 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     setPhase('processing')
     setError('')
     try {
-      const text = await transcribeAudio(blob)
+      const rawText = await transcribeAudio(blob)
+      // Reject blank / too-short / gibberish audio before calling GPT
+      const text = validateTranscript(rawText)
       setTranscript(text)
       const extracted = await extractTaskFields(text, currentUsers)
+      // Reject if GPT assigned users that don't exist in the team
+      validateAssignedUsers(extracted, currentUsers)
       setEditValues({
         name: extracted.name || '',
         assignedUsersIds: extracted.assignedUsersIds || [],
