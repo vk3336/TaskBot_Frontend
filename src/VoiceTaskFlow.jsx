@@ -58,18 +58,24 @@ function validateTranscript(text) {
   return text.trim()
 }
 
-/* ── Validate that extracted user IDs all exist in the known users list ── */
+/* ── Validate that extracted user IDs are present and all exist in the known users list ── */
 function validateAssignedUsers(extracted, users) {
   const ids = extracted.assignedUsersIds || []
-  if (ids.length === 0) return // unassigned is fine
 
+  // Reject if no user was mentioned in the audio at all
+  if (ids.length === 0) {
+    const teamNames = users.map(u => u.name).join(', ')
+    throw new Error(`No team member was mentioned in the recording. Please re-record and include a valid assignee name.\n\nAvailable team members: ${teamNames}`)
+  }
+
+  // Reject if any of the returned IDs don't exist in the real users list
   const validIds = new Set(users.map(u => u.id))
   const invalid = ids.filter(id => !validIds.has(id))
   if (invalid.length > 0) {
-    // Try to show names if GPT returned them so the error is readable
     const names = extracted.assignedUsersNames || {}
     const invalidLabels = invalid.map(id => names[id] || id).join(', ')
-    throw new Error(`Assigned user(s) not found in your team: "${invalidLabels}". Please re-record and mention a valid team member name.`)
+    const teamNames = users.map(u => u.name).join(', ')
+    throw new Error(`Assigned user(s) not found in your team: "${invalidLabels}". Please re-record and mention a valid team member name.\n\nAvailable team members: ${teamNames}`)
   }
 }
 
