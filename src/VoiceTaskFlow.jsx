@@ -206,6 +206,12 @@ async function convertToMp3(blob) {
   return new Blob(mp3Data, { type: 'audio/mp3' })
 }
 
+// Force any blob to have a clean audio/mp3 type — prevents browser from
+// normalising 'audio/mp3' → 'audio/mpeg' which EspoCRM misclassifies as video/mpeg
+function forceAudioMp3Blob(blob) {
+  return new Blob([blob], { type: 'audio/mp3' })
+}
+
 /* ── Recording hook — records webm, converts to MP3 on stop ── */
 function useRecorder(onError) {
   const [recording, setRecording] = useState(false)
@@ -231,7 +237,7 @@ function useRecorder(onError) {
         setConverting(true)
         try {
           const mp3Blob = await convertToMp3(rawBlob)
-          setAudioBlob(mp3Blob)
+          setAudioBlob(forceAudioMp3Blob(mp3Blob))
           setAudioURL(URL.createObjectURL(mp3Blob))
         } catch (convErr) {
           // Conversion failed — fall back to the original webm blob so recording still works
@@ -322,7 +328,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     if (file.type !== 'audio/mp3' && file.type !== 'audio/mpeg') {
       try {
         const mp3Blob = await convertToMp3(file)
-        processAudio(mp3Blob, users)
+        processAudio(forceAudioMp3Blob(mp3Blob), users)
       } catch {
         // Conversion failed — send original, backend will still store it
         processAudio(file, users)

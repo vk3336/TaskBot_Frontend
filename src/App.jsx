@@ -370,18 +370,9 @@ export default function App() {
       if (taskId && audioBlob) {
         try {
           const fd = new FormData()
-          // Blob is always audio/mp3 after conversion in VoiceTaskFlow — use fixed clean filename
-          const rawMime = (audioBlob.type || '').toLowerCase()
-          const baseMime = rawMime.split(';')[0].trim()
-          const mimeToExt = {
-            'audio/mp3': 'mp3', 'audio/mpeg': 'mp3',
-            'audio/webm': 'webm', 'audio/ogg': 'ogg',
-            'audio/mp4': 'mp4', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
-            'audio/aac': 'aac', 'audio/flac': 'flac',
-          }
-          const ext = mimeToExt[baseMime] || 'mp3'
-          const cleanBlob = new Blob([audioBlob], { type: baseMime || 'audio/mp3' })
-          fd.append('file', cleanBlob, `voice-note.${ext}`)
+          // Always send as audio/mp3 — EspoCRM misclassifies audio/mpeg as video/mpeg
+          const cleanBlob = new Blob([audioBlob], { type: 'audio/mp3' })
+          fd.append('file', cleanBlob, 'voice-note.mp3')
           const attachRes = await fetch(`${API}/${taskId}/attachment`, { method: 'POST', body: fd })
           if (attachRes.ok) {
             audioAttached = true
