@@ -342,22 +342,50 @@ function CreateTaskForm({ onSubmit, onCancel }) {
   )
 }
 
+const PAGE_SIZE = 3
+
 function TaskListWithFilter({ tasks, label }) {
   const [filters, setFilters] = useState(EMPTY_FILTERS)
-  const filtered = applyFilters(tasks, filters)
+  const [visible, setVisible] = useState(PAGE_SIZE)
+
+  // Reset pagination when filters change
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters)
+    setVisible(PAGE_SIZE)
+  }
+
+  const filtered  = applyFilters(tasks, filters)
+  const shown     = filtered.slice(0, visible)
+  const remaining = filtered.length - visible
 
   return (
     <>
       {label && <span style={{ whiteSpace: 'pre-wrap' }}>{label}</span>}
-      <TaskFilterBar tasks={tasks} filters={filters} onChange={setFilters} />
+      <TaskFilterBar tasks={tasks} filters={filters} onChange={handleFilterChange} />
+
       {filtered.length > 0
-        ? filtered.map(t => <TaskCard key={t.id} task={t} />)
-        : <div className="empty-state">😕 No tasks match the selected filters.</div>}
-      {filtered.length !== tasks.length && (
-        <div className="filter-result-count">
-          Showing {filtered.length} of {tasks.length} tasks
-        </div>
-      )}
+        ? <>
+            {shown.map(t => <TaskCard key={t.id} task={t} />)}
+
+            <div className="pagination-row">
+              <span className="pagination-info">
+                Showing {shown.length} of {filtered.length}{filters.status || filters.priority || filters.dateStartDate || filters.dateEndDate ? ' filtered' : ''} tasks
+                {filtered.length !== tasks.length && ` (${tasks.length} total)`}
+              </span>
+              {remaining > 0 && (
+                <button className="show-more-btn" onClick={() => setVisible(v => v + PAGE_SIZE)}>
+                  Show {Math.min(remaining, PAGE_SIZE)} more ↓
+                </button>
+              )}
+              {visible > PAGE_SIZE && remaining === 0 && (
+                <button className="show-less-btn" onClick={() => setVisible(PAGE_SIZE)}>
+                  Show less ↑
+                </button>
+              )}
+            </div>
+          </>
+        : <div className="empty-state">😕 No tasks match the selected filters.</div>
+      }
     </>
   )
 }
