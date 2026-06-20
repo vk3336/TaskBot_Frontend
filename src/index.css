@@ -1583,6 +1583,33 @@ body {
   font-style: italic;
 }
 
+/* Multilingual transcript rows */
+.vf-transcript-langs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.vf-transcript-lang-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 7px;
+  border-left: 2px solid rgba(99,102,241,0.35);
+}
+
+.vf-lang-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--indigo-light);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
 /* Confirm step header */
 .vf-confirm-header {
   display: flex;

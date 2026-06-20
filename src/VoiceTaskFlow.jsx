@@ -18,6 +18,7 @@ async function transcribeAudio(audioBlob) {
   const formData = new FormData()
   formData.append('file', audioBlob, 'recording.webm')
   formData.append('model', 'whisper-1')
+  // Auto-detect language — Whisper handles Gujarati, Hindi, and English natively
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${OPENAI_KEY}` },
@@ -29,6 +30,42 @@ async function transcribeAudio(audioBlob) {
   }
   const data = await res.json()
   return data.text || ''
+}
+
+/* ── Translate transcript into Gujarati, Hindi, and English ── */
+async function translateTranscript(text) {
+  if (!OPENAI_KEY) return { gujarati: text, hindi: text, english: text }
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      temperature: 0.1,
+      messages: [
+        {
+          role: 'system',
+          content: `You are a multilingual translator. Given a transcript (in any language), return ONLY a valid JSON object with three keys:
+{
+  "gujarati": "transcript in Gujarati script",
+  "hindi": "transcript in Hindi (Devanagari script)",
+  "english": "transcript in English"
+}
+Translate accurately. If the source is already one of these languages, keep it as-is for that language and translate for the others. Return ONLY the JSON, no markdown fences.`,
+        },
+        { role: 'user', content: `Transcript: "${text}"` },
+      ],
+    }),
+  })
+  if (!res.ok) return { gujarati: text, hindi: text, english: text }
+  const data = await res.json()
+  const raw = data.choices?.[0]?.message?.content || '{}'
+  const parsed = safeParseJSON(raw)
+  if (!parsed) return { gujarati: text, hindi: text, english: text }
+  return {
+    gujarati: parsed.gujarati || text,
+    hindi: parsed.hindi || text,
+    english: parsed.english || text,
+  }
 }
 
 /* ── Fix #8: strip markdown code fences before parsing, with a safe fallback ── */
@@ -275,6 +312,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   const [confirmStep, setConfirmStep] = useState(0)
   const [editValues, setEditValues] = useState({})
   const [transcript, setTranscript] = useState('')
+  // Multilingual transcript: { gujarati, hindi, english }
+  const [transcriptLangs, setTranscriptLangs] = useState(null)
   const [editMode, setEditMode] = useState(false)
   const [editInput, setEditInput] = useState('')
   // Fix #2: track audio presence in state so JSX reads state, not ref directly
@@ -290,7 +329,6 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       .catch(err => { setError(`Failed to load users: ${err.message}`); setUsersLoading(false) })
   }, [])
 
-  // Fix #5: pass users as argument to processAudio so it never closes over stale state
   const processAudio = async (blob, currentUsers) => {
     audioBlobRef.current = blob
     setHasAudio(true)
@@ -301,7 +339,14 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       // Reject blank / too-short / gibberish audio before calling GPT
       const text = validateTranscript(rawText)
       setTranscript(text)
-      const extracted = await extractTaskFields(text, currentUsers)
+
+      // Translate into Gujarati, Hindi, English in parallel with task extraction
+      const [langs, extracted] = await Promise.all([
+        translateTranscript(text),
+        extractTaskFields(text, currentUsers),
+      ])
+      setTranscriptLangs(langs)
+
       // Reject if GPT assigned users that don't exist in the team
       validateAssignedUsers(extracted, currentUsers)
       setEditValues({
@@ -312,6 +357,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
         priority: extracted.priority || 'Normal',
         dateStartDate: extracted.dateStartDate || '',
         dateEndDate: extracted.dateEndDate || '',
+        // Store English transcript in cMessage field
+        cMessage: langs.english || text,
       })
       setConfirmStep(0)
       setPhase('confirm')
@@ -399,6 +446,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       priority: editValues.priority || 'Normal',
       dateStartDate: editValues.dateStartDate || undefined,
       dateEndDate: editValues.dateEndDate || undefined,
+      // Store English transcript in EspoCRM cMessage field
+      cMessage: editValues.cMessage || undefined,
     }
     Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k])
     onDone(payload, audioBlobRef.current)
@@ -454,10 +503,27 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
           <span className="vf-step-title">Confirm Task Details</span>
         </div>
 
-        {transcript && (
+        {(transcript || transcriptLangs) && (
           <div className="vf-transcript">
             <span className="vf-transcript-label">🎙 Transcript</span>
-            <span className="vf-transcript-text">"{transcript}"</span>
+            {transcriptLangs ? (
+              <div className="vf-transcript-langs">
+                <div className="vf-transcript-lang-row">
+                  <span className="vf-lang-badge">🇮🇳 ગુજરાતી</span>
+                  <span className="vf-transcript-text">"{transcriptLangs.gujarati}"</span>
+                </div>
+                <div className="vf-transcript-lang-row">
+                  <span className="vf-lang-badge">🇮🇳 हिन्दी</span>
+                  <span className="vf-transcript-text">"{transcriptLangs.hindi}"</span>
+                </div>
+                <div className="vf-transcript-lang-row">
+                  <span className="vf-lang-badge">🇬🇧 English</span>
+                  <span className="vf-transcript-text">"{transcriptLangs.english}"</span>
+                </div>
+              </div>
+            ) : (
+              <span className="vf-transcript-text">"{transcript}"</span>
+            )}
           </div>
         )}
 
