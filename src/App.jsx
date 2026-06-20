@@ -140,9 +140,10 @@ function TaskFilterBar({ tasks, filters, onChange }) {
                 return (
                   <button
                     key={p}
+                    data-priority={p}
                     className={`filter-chip priority-chip ${filters.priority === p ? 'active' : ''}`}
                     style={filters.priority === p
-                      ? { background: col.bg, borderColor: col.border, color: col.color }
+                      ? { background: col.bg, borderColor: col.border, color: col.color, boxShadow: `0 0 0 2px ${col.border}, 0 4px 14px rgba(0,0,0,0.25)` }
                       : {}}
                     onClick={() => onChange({ ...filters, priority: filters.priority === p ? '' : p })}
                   >
@@ -502,11 +503,18 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const messagesEndRef = useRef(null)
+  const lastMsgRef = useRef(null)
   const textareaRef = useRef(null)
 
   useEffect(() => {
     if (messages.length === 0) return
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Scroll the newest message into view from its top, so filter bar is visible
+    // For typing indicator keep scrolling to bottom so the dots stay in view
+    if (isTyping) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    } else {
+      lastMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
   }, [messages, isTyping])
 
   const addMsg = useCallback((msg) => {
@@ -747,16 +755,17 @@ export default function App() {
             </div>
           ) : (
             <>
-              {messages.map(msg => (
-                <Message
-                  key={msg.id}
-                  msg={msg}
-                  onUserSelect={handleUserSelect}
-                  onCreateSubmit={handleCreateSubmit}
-                  onCreateCancel={handleCreateCancel}
-                  onVoiceDone={handleVoiceDone}
-                  onVoiceCancel={handleVoiceCancel}
-                />
+              {messages.map((msg, idx) => (
+                <div key={msg.id} ref={idx === messages.length - 1 ? lastMsgRef : null}>
+                  <Message
+                    msg={msg}
+                    onUserSelect={handleUserSelect}
+                    onCreateSubmit={handleCreateSubmit}
+                    onCreateCancel={handleCreateCancel}
+                    onVoiceDone={handleVoiceDone}
+                    onVoiceCancel={handleVoiceCancel}
+                  />
+                </div>
               ))}
               {isTyping && <TypingIndicator />}
             </>
