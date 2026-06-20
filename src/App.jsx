@@ -69,8 +69,29 @@ function sortPriorities(arr) {
   return arr.sort((a, b) => (PRIORITY_ORDER[a] ?? 99) - (PRIORITY_ORDER[b] ?? 99))
 }
 
+function getUniqueUsers(tasks) {
+  const userMap = new Map()
+  tasks.forEach(t => {
+    if (t.assignedUsersNames && typeof t.assignedUsersNames === 'object') {
+      Object.entries(t.assignedUsersNames).forEach(([id, name]) => {
+        if (id && name) userMap.set(id, name)
+      })
+    }
+  })
+  return [...userMap.entries()]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function taskHasUser(task, userId) {
+  if (!userId) return true
+  if ((task.assignedUsersIds || []).includes(userId)) return true
+  return Object.prototype.hasOwnProperty.call(task.assignedUsersNames || {}, userId)
+}
+
 function applyFilters(tasks, filters) {
   return tasks.filter(t => {
+    if (filters.userId && !taskHasUser(t, filters.userId)) return false
     if (filters.status && t.status !== filters.status) return false
     if (filters.priority && t.priority !== filters.priority) return false
     if (filters.dateStartDate && (!t.dateStartDate || t.dateStartDate < filters.dateStartDate)) return false
@@ -79,13 +100,18 @@ function applyFilters(tasks, filters) {
   })
 }
 
-const EMPTY_FILTERS = { status: '', priority: '', dateStartDate: '', dateEndDate: '' }
+const EMPTY_FILTERS = { status: '', priority: '', dateStartDate: '', dateEndDate: '', userId: '' }
 
-function TaskFilterBar({ tasks, filters, onChange }) {
+function hasActiveFilters(filters) {
+  return !!(filters.status || filters.priority || filters.dateStartDate || filters.dateEndDate || filters.userId)
+}
+
+function TaskFilterBar({ tasks, filters, onChange, showUserFilter = false }) {
   const statuses  = getUniqueValues(tasks, 'status')
   const priorities = sortPriorities(getUniqueValues(tasks, 'priority'))
   const startDates = getUniqueValues(tasks, 'dateStartDate')
   const endDates   = getUniqueValues(tasks, 'dateEndDate')
+  const users      = showUserFilter ? getUniqueUsers(tasks) : []
 
   const activeCount = Object.values(filters).filter(Boolean).length
   const hasFilters  = activeCount > 0
@@ -152,6 +178,21 @@ function TaskFilterBar({ tasks, filters, onChange }) {
                 )
               })}
             </div>
+          </div>
+        )}
+
+        {/* User — only shown on All Tasks view */}
+        {showUserFilter && users.length > 0 && (
+          <div className="filter-group filter-group-date">
+            <label className="filter-label">Task by User</label>
+            <select
+              className="filter-select"
+              value={filters.userId}
+              onChange={e => onChange({ ...filters, userId: e.target.value })}
+            >
+              <option value="">Any</option>
+              {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
           </div>
         )}
 
@@ -345,7 +386,7 @@ function CreateTaskForm({ onSubmit, onCancel }) {
 
 const PAGE_SIZE = 3
 
-function TaskListWithFilter({ tasks, label }) {
+function TaskListWithFilter({ tasks, label, showUserFilter = false }) {
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [visible, setVisible] = useState(PAGE_SIZE)
 
@@ -362,7 +403,7 @@ function TaskListWithFilter({ tasks, label }) {
   return (
     <>
       {label && <span style={{ whiteSpace: 'pre-wrap' }}>{label}</span>}
-      <TaskFilterBar tasks={tasks} filters={filters} onChange={handleFilterChange} />
+      <TaskFilterBar tasks={tasks} filters={filters} onChange={handleFilterChange} showUserFilter={showUserFilter} />
 
       {filtered.length > 0
         ? <>
@@ -370,7 +411,7 @@ function TaskListWithFilter({ tasks, label }) {
 
             <div className="pagination-row">
               <span className="pagination-info">
-                Showing {shown.length} of {filtered.length}{filters.status || filters.priority || filters.dateStartDate || filters.dateEndDate ? ' filtered' : ''} tasks
+                Showing {shown.length} of {filtered.length}{hasActiveFilters(filters) ? ' filtered' : ''} tasks
                 {filtered.length !== tasks.length && ` (${tasks.length} total)`}
               </span>
               {remaining > 0 && (
@@ -404,7 +445,7 @@ function Message({ msg, onUserSelect, onCreateSubmit, onCreateCancel, onVoiceDon
         <div className={`bubble ${isUser ? 'user' : 'ai'}`}>
           {/* Task list with filter bar */}
           {msg.tasks != null
-            ? <TaskListWithFilter tasks={msg.tasks} label={msg.content} />
+            ? <TaskListWithFilter tasks={msg.tasks} label={msg.content} showUserFilter={msg.allTasks} />
             : msg.content && <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>}
           {msg.users && <UserList users={msg.users} onSelect={onUserSelect} />}
           {msg.showForm && <CreateTaskForm onSubmit={onCreateSubmit} onCancel={onCreateCancel} />}
@@ -530,7 +571,7 @@ export default function App() {
     try {
       const tasks = await fetchAllTasks()
       setIsTyping(false)
-      addMsg({ role: 'ai', content: tasks.length > 0 ? `Here are all ${tasks.length} assigned tasks:` : null, tasks })
+      addMsg({ role: 'ai', content: tasks.length > 0 ? `Here are all ${tasks.length} assigned tasks:` : null, tasks, allTasks: true })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Failed to fetch tasks: ${e.message}` })
