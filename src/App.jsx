@@ -57,6 +57,137 @@ async function postTask(body) {
   return res.json()
 }
 
+/* ─── Filter helpers ───────────────────────────────── */
+function getUniqueValues(tasks, field) {
+  const set = new Set()
+  tasks.forEach(t => { if (t[field]) set.add(t[field]) })
+  return [...set].sort()
+}
+
+const PRIORITY_ORDER = { Urgent: 0, High: 1, Normal: 2, Low: 3 }
+function sortPriorities(arr) {
+  return arr.sort((a, b) => (PRIORITY_ORDER[a] ?? 99) - (PRIORITY_ORDER[b] ?? 99))
+}
+
+function applyFilters(tasks, filters) {
+  return tasks.filter(t => {
+    if (filters.status && t.status !== filters.status) return false
+    if (filters.priority && t.priority !== filters.priority) return false
+    if (filters.dateStartDate && (!t.dateStartDate || t.dateStartDate < filters.dateStartDate)) return false
+    if (filters.dateEndDate && (!t.dateEndDate || t.dateEndDate > filters.dateEndDate)) return false
+    return true
+  })
+}
+
+const EMPTY_FILTERS = { status: '', priority: '', dateStartDate: '', dateEndDate: '' }
+
+function TaskFilterBar({ tasks, filters, onChange }) {
+  const statuses  = getUniqueValues(tasks, 'status')
+  const priorities = sortPriorities(getUniqueValues(tasks, 'priority'))
+  const startDates = getUniqueValues(tasks, 'dateStartDate')
+  const endDates   = getUniqueValues(tasks, 'dateEndDate')
+
+  const activeCount = Object.values(filters).filter(Boolean).length
+  const hasFilters  = activeCount > 0
+
+  const priorityColors = {
+    Urgent: { bg: 'rgba(244,63,94,0.15)', border: 'rgba(244,63,94,0.4)', color: '#f87171' },
+    High:   { bg: 'rgba(245,158,11,0.15)', border: 'rgba(245,158,11,0.4)', color: '#fbbf24' },
+    Normal: { bg: 'rgba(99,102,241,0.15)', border: 'rgba(99,102,241,0.4)', color: '#818cf8' },
+    Low:    { bg: 'rgba(16,185,129,0.15)', border: 'rgba(16,185,129,0.4)', color: '#34d399' },
+  }
+
+  return (
+    <div className="task-filter-bar">
+      <div className="task-filter-header">
+        <span className="task-filter-title">
+          🔍 Filters
+          {hasFilters && <span className="filter-active-badge">{activeCount}</span>}
+        </span>
+        {hasFilters && (
+          <button className="filter-clear-btn" onClick={() => onChange(EMPTY_FILTERS)}>
+            ✕ Clear all
+          </button>
+        )}
+      </div>
+
+      <div className="task-filter-row">
+        {/* Status */}
+        {statuses.length > 0 && (
+          <div className="filter-group">
+            <label className="filter-label">Status</label>
+            <div className="filter-chips">
+              {statuses.map(s => (
+                <button
+                  key={s}
+                  className={`filter-chip status-chip ${getStatusClass(s)} ${filters.status === s ? 'active' : ''}`}
+                  onClick={() => onChange({ ...filters, status: filters.status === s ? '' : s })}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Priority */}
+        {priorities.length > 0 && (
+          <div className="filter-group">
+            <label className="filter-label">Priority</label>
+            <div className="filter-chips">
+              {priorities.map(p => {
+                const col = priorityColors[p] || priorityColors.Normal
+                return (
+                  <button
+                    key={p}
+                    className={`filter-chip priority-chip ${filters.priority === p ? 'active' : ''}`}
+                    style={filters.priority === p
+                      ? { background: col.bg, borderColor: col.border, color: col.color }
+                      : {}}
+                    onClick={() => onChange({ ...filters, priority: filters.priority === p ? '' : p })}
+                  >
+                    {p}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Start Date */}
+        {startDates.length > 0 && (
+          <div className="filter-group filter-group-date">
+            <label className="filter-label">Start Date</label>
+            <select
+              className="filter-select"
+              value={filters.dateStartDate}
+              onChange={e => onChange({ ...filters, dateStartDate: e.target.value })}
+            >
+              <option value="">Any</option>
+              {startDates.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* End Date */}
+        {endDates.length > 0 && (
+          <div className="filter-group filter-group-date">
+            <label className="filter-label">Due Date</label>
+            <select
+              className="filter-select"
+              value={filters.dateEndDate}
+              onChange={e => onChange({ ...filters, dateEndDate: e.target.value })}
+            >
+              <option value="">Any</option>
+              {endDates.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /* ─── Sub-components ───────────────────────────────── */
 function TaskCard({ task }) {
   const assigneeList = Object.values(task.assignedUsersNames || {})
@@ -211,6 +342,26 @@ function CreateTaskForm({ onSubmit, onCancel }) {
   )
 }
 
+function TaskListWithFilter({ tasks, label }) {
+  const [filters, setFilters] = useState(EMPTY_FILTERS)
+  const filtered = applyFilters(tasks, filters)
+
+  return (
+    <>
+      {label && <span style={{ whiteSpace: 'pre-wrap' }}>{label}</span>}
+      <TaskFilterBar tasks={tasks} filters={filters} onChange={setFilters} />
+      {filtered.length > 0
+        ? filtered.map(t => <TaskCard key={t.id} task={t} />)
+        : <div className="empty-state">😕 No tasks match the selected filters.</div>}
+      {filtered.length !== tasks.length && (
+        <div className="filter-result-count">
+          Showing {filtered.length} of {tasks.length} tasks
+        </div>
+      )}
+    </>
+  )
+}
+
 function Message({ msg, onUserSelect, onCreateSubmit, onCreateCancel, onVoiceDone, onVoiceCancel }) {
   const isUser = msg.role === 'user'
   return (
@@ -222,9 +373,10 @@ function Message({ msg, onUserSelect, onCreateSubmit, onCreateCancel, onVoiceDon
       </div>
       <div className="message-content">
         <div className={`bubble ${isUser ? 'user' : 'ai'}`}>
-          {msg.content && <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>}
-          {msg.tasks && msg.tasks.length > 0 && msg.tasks.map(t => <TaskCard key={t.id} task={t} />)}
-          {msg.tasks && msg.tasks.length === 0 && <div className="empty-state">😕 No tasks found.</div>}
+          {/* Task list with filter bar */}
+          {msg.tasks != null
+            ? <TaskListWithFilter tasks={msg.tasks} label={msg.content} />
+            : msg.content && <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>}
           {msg.users && <UserList users={msg.users} onSelect={onUserSelect} />}
           {msg.showForm && <CreateTaskForm onSubmit={onCreateSubmit} onCancel={onCreateCancel} />}
           {msg.showVoice && <VoiceTaskFlow onDone={(payload, blob) => onVoiceDone(payload, blob)} onCancel={onVoiceCancel} />}
@@ -433,7 +585,11 @@ export default function App() {
     try {
       const tasks = await fetchTasksByUser(user.id)
       setIsTyping(false)
-      addMsg({ role: 'ai', content: tasks.length > 0 ? `Here are ${tasks.length} task(s) assigned to ${user.name}:` : `No tasks found for ${user.name}.`, tasks: tasks.length > 0 ? tasks : undefined })
+      addMsg({
+        role: 'ai',
+        content: tasks.length > 0 ? `Here are ${tasks.length} task(s) assigned to ${user.name}:` : null,
+        tasks,
+      })
     } catch (e) {
       setIsTyping(false)
       addMsg({ role: 'ai', content: `❌ Could not fetch tasks: ${e.message}` })
