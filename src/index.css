@@ -1099,6 +1099,91 @@ body {
 .form-btn.submit:hover { transform: translateY(-1px); box-shadow: 0 8px 28px rgba(99,102,241,0.5); }
 .form-btn.submit:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
+/* ── CreateTaskForm account/contact search fields (cf- prefix) ── */
+.cf-search-wrap {
+  position: relative;
+}
+
+.cf-selected-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(99,102,241,0.1);
+  border: 1px solid rgba(99,102,241,0.25);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.cf-clear-btn {
+  margin-left: auto;
+  background: rgba(244,63,94,0.1);
+  border: 1px solid rgba(244,63,94,0.2);
+  color: #fb7185;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  flex-shrink: 0;
+  transition: all 0.13s ease;
+}
+.cf-clear-btn:hover { background: rgba(244,63,94,0.2); }
+
+.cf-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0; right: 0;
+  z-index: 50;
+  background: var(--surface-2);
+  border: 1px solid var(--border-bright);
+  border-radius: 10px;
+  overflow: hidden;
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.5);
+}
+
+.cf-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 13px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.12s;
+}
+.cf-dropdown-item:last-child { border-bottom: none; }
+.cf-dropdown-item:hover { background: rgba(99,102,241,0.13); color: var(--text-primary); }
+
+.cf-dropdown-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.cf-create-btn {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  background: rgba(16,185,129,0.07);
+  border: 1px dashed rgba(16,185,129,0.35);
+  color: #34d399;
+  transition: all 0.15s ease;
+}
+.cf-create-btn:hover:not(:disabled) { background: rgba(16,185,129,0.14); border-color: rgba(16,185,129,0.55); }
+.cf-create-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    INPUT AREA
 â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */

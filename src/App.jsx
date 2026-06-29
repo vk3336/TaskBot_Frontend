@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import VoiceTaskFlow from './VoiceTaskFlow.jsx'
 
-const API = import.meta.env.VITE_BACKEND
-const USERS_API = import.meta.env.VITE_USERS_API
+const API          = import.meta.env.VITE_BACKEND
+const USERS_API    = import.meta.env.VITE_USERS_API
+const ACCOUNT_API  = import.meta.env.VITE_ACCOUNT_API
+const CONTACT_API  = import.meta.env.VITE_CONTACT_API
 
 /* ── env guard — fail loudly at startup instead of silently at runtime ── */
-if (!API) console.error('[TaskBot] VITE_BACKEND is not set. Task API calls will fail. Check your .env.local file.')
+if (!API)       console.error('[TaskBot] VITE_BACKEND is not set. Task API calls will fail. Check your .env.local file.')
 if (!USERS_API) console.error('[TaskBot] VITE_USERS_API is not set. User loading will fail. Check your .env.local file.')
 
 /* ─── helpers ─────────────────────────────────────── */
@@ -55,6 +57,52 @@ async function postTask(body) {
     throw new Error(err.error || `Server error ${res.status}`)
   }
   return res.json()
+}
+async function fetchAccounts() {
+  if (!ACCOUNT_API) return []
+  const res = await fetch(ACCOUNT_API)
+  if (!res.ok) return []
+  return (await res.json()).data || []
+}
+async function fetchContacts() {
+  if (!CONTACT_API) return []
+  const res = await fetch(CONTACT_API)
+  if (!res.ok) return []
+  return (await res.json()).data || []
+}
+async function apiCreateAccount(name) {
+  const res = await fetch(ACCOUNT_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) })
+  const json = await res.json()
+  if (!res.ok) throw new Error(json.message || `Server error ${res.status}`)
+  return json.data
+}
+async function apiCreateContact(name, accountId) {
+  const res = await fetch(CONTACT_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, accountId: accountId || undefined }) })
+  const json = await res.json()
+  if (!res.ok) throw new Error(json.message || `Server error ${res.status}`)
+  return json.data
+}
+
+/* ── Scored fuzzy match (same as VoiceTaskFlow) ── */
+function fuzzyMatch(query, list) {
+  if (!query || !list?.length) return []
+  const q = query.toLowerCase().trim()
+  if (!q) return []
+  const qWords = q.split(/\s+/).filter(Boolean)
+  const scored = list.map(r => {
+    const n = r.name.toLowerCase()
+    const nWords = n.split(/\s+/).filter(Boolean)
+    let score = 0
+    if (n === q)                                                          score = 100
+    else if (n.startsWith(q))                                             score = 80
+    else if (qWords.every(w => n.includes(w)))                            score = 60
+    else if (qWords.some(w => n.includes(w)))                             score = 40
+    else if (nWords.some(nw => qWords.some(qw => nw.startsWith(qw))))    score = 20
+    else if (qWords.some(w => n.replace(/\s+/g,'').includes(w.replace(/\s+/g,'')))) score = 10
+    return { r, score }
+  }).filter(x => x.score > 0)
+  scored.sort((a, b) => b.score - a.score)
+  return scored.map(x => x.r)
 }
 
 /* ─── Filter helpers ───────────────────────────────── */
@@ -279,23 +327,37 @@ function CreateTaskForm({ onSubmit, onCancel }) {
     name: '', description: '', priority: 'Normal',
     dateStartDate: '', dateEndDate: '',
     assignedUsersIds: [], assignedUsersNames: {},
+    accountId: '', accountName: '', contactId: '', contactName: '',
   })
-  const [users, setUsers] = useState([])
+  const [users,    setUsers]    = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [contacts, setContacts] = useState([])
   const [usersLoading, setUsersLoading] = useState(true)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState('')
+
+  // search state
+  const [accountSearch, setAccountSearch] = useState('')
+  const [contactSearch, setContactSearch] = useState('')
+  const [creatingAcc,   setCreatingAcc]   = useState(false)
+  const [creatingCon,   setCreatingCon]   = useState(false)
+  const [accError,      setAccError]      = useState('')
+  const [conError,      setConError]      = useState('')
 
   useEffect(() => {
     fetchUsers()
       .then(d => setUsers(d))
       .catch(err => { setError(`Failed to load users: ${err.message}`); setUsers([]) })
       .finally(() => setUsersLoading(false))
+    fetchAccounts().then(setAccounts).catch(() => {})
+    fetchContacts().then(setContacts).catch(() => {})
   }, [])
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
+
   const toggleUser = (userId, userName) => {
     setForm(prev => {
-      const ids = prev.assignedUsersIds || []
+      const ids   = prev.assignedUsersIds || []
       const names = { ...(prev.assignedUsersNames || {}) }
       if (ids.includes(userId)) {
         delete names[userId]
@@ -307,24 +369,88 @@ function CreateTaskForm({ onSubmit, onCancel }) {
     })
   }
 
+  // Select account → filter contacts to this account; if only 1 contact auto-fill it
+  const selectAccount = (a) => {
+    setForm(prev => {
+      const updated = { ...prev, accountId: a.id, accountName: a.name, contactId: '', contactName: '' }
+      return updated
+    })
+    setAccountSearch(a.name)
+    setContactSearch('')
+    // Auto-fill contact if only one belongs to this account
+    const acctContacts = contacts.filter(c => c.accountId === a.id)
+    if (acctContacts.length === 1) {
+      setForm(prev => ({ ...prev, accountId: a.id, accountName: a.name, contactId: acctContacts[0].id, contactName: acctContacts[0].name }))
+      setContactSearch(acctContacts[0].name)
+    }
+  }
+
+  // Select contact → auto-fill its account if not already set
+  const selectContact = (c) => {
+    setForm(prev => {
+      const updated = { ...prev, contactId: c.id, contactName: c.name }
+      if (c.accountId && !prev.accountId) {
+        updated.accountId   = c.accountId
+        updated.accountName = c.accountName || ''
+        setAccountSearch(c.accountName || '')
+      }
+      return updated
+    })
+    setContactSearch(c.name)
+  }
+
+  const handleCreateAccount = async () => {
+    if (!accountSearch.trim()) return
+    setCreatingAcc(true); setAccError('')
+    try {
+      const newAcc = await apiCreateAccount(accountSearch.trim())
+      setAccounts(prev => [...prev, newAcc])
+      selectAccount(newAcc)
+    } catch (e) { setAccError(e.message) }
+    finally { setCreatingAcc(false) }
+  }
+
+  const handleCreateContact = async () => {
+    if (!contactSearch.trim()) return
+    setCreatingCon(true); setConError('')
+    try {
+      const newCon = await apiCreateContact(contactSearch.trim(), form.accountId || undefined)
+      setContacts(prev => [...prev, newCon])
+      selectContact(newCon)
+    } catch (e) { setConError(e.message) }
+    finally { setCreatingCon(false) }
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!form.name.trim()) { setError('Task name is required.'); return }
     setLoading(true); setError('')
     try {
       const payload = {
-        name: form.name, priority: form.priority,
-        description: form.description || undefined,
-        dateStartDate: form.dateStartDate || undefined,
-        dateEndDate: form.dateEndDate || undefined,
-        assignedUsersIds: form.assignedUsersIds.length > 0 ? form.assignedUsersIds : undefined,
+        name:             form.name,
+        priority:         form.priority,
+        description:      form.description      || undefined,
+        dateStartDate:    form.dateStartDate     || undefined,
+        dateEndDate:      form.dateEndDate       || undefined,
+        assignedUsersIds: form.assignedUsersIds.length  > 0 ? form.assignedUsersIds  : undefined,
         assignedUsersNames: Object.keys(form.assignedUsersNames).length > 0 ? form.assignedUsersNames : undefined,
+        contactId:        form.contactId         || undefined,
+        accountId:        form.accountId         || undefined,
       }
       Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k])
       await onSubmit(payload)
     } catch (err) { setError(err.message) }
     finally { setLoading(false) }
   }
+
+  // Compute dropdown results
+  const filteredContacts = form.accountId
+    ? contacts.filter(c => c.accountId === form.accountId)
+    : contacts
+  const accResults = accountSearch.trim() ? fuzzyMatch(accountSearch, accounts).slice(0, 8) : accounts.slice(0, 8)
+  const conResults = contactSearch.trim() ? fuzzyMatch(contactSearch, filteredContacts).slice(0, 8) : filteredContacts.slice(0, 8)
+  const accExact   = accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase())
+  const conExact   = contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
 
   const assignedNames = Object.values(form.assignedUsersNames)
   return (
@@ -334,6 +460,7 @@ function CreateTaskForm({ onSubmit, onCancel }) {
         <input className="form-input" placeholder="e.g. Fix login bug" value={form.name}
           onChange={e => set('name', e.target.value)} />
       </div>
+
       <div className="form-row">
         <label>Assign To {assignedNames.length > 0 && <span style={{ color: 'var(--accent-light)', fontSize: '11px' }}>({assignedNames.join(', ')})</span>}</label>
         {usersLoading ? (
@@ -350,6 +477,91 @@ function CreateTaskForm({ onSubmit, onCancel }) {
           </div>
         )}
       </div>
+
+      {/* ── Account field ── */}
+      <div className="form-row">
+        <label>🏢 Account (Company)</label>
+        {form.accountId ? (
+          <div className="cf-selected-row">
+            <span>🏢 <strong>{form.accountName}</strong></span>
+            <button type="button" className="cf-clear-btn" onClick={() => {
+              setForm(prev => ({ ...prev, accountId: '', accountName: '', contactId: '', contactName: '' }))
+              setAccountSearch(''); setContactSearch('')
+            }}>✕</button>
+          </div>
+        ) : (
+          <div className="cf-search-wrap">
+            <input className="form-input" placeholder="Search or type company name…"
+              value={accountSearch}
+              onChange={e => { setAccountSearch(e.target.value); setAccError('') }} />
+            {accountSearch.trim() && accResults.length > 0 && (
+              <div className="cf-dropdown">
+                {accResults.map(a => (
+                  <div key={a.id} className="cf-dropdown-item" onClick={() => selectAccount(a)}>
+                    🏢 {a.name}
+                  </div>
+                ))}
+              </div>
+            )}
+            {accountSearch.trim().length > 1 && !accExact && (
+              <button type="button" className="cf-create-btn" onClick={handleCreateAccount} disabled={creatingAcc}>
+                {creatingAcc ? '⏳ Creating…' : `➕ Create "${accountSearch.trim()}"`}
+              </button>
+            )}
+            {accError && <div className="form-error" style={{ marginTop: 4 }}>⚠️ {accError}</div>}
+          </div>
+        )}
+      </div>
+
+      {/* ── Contact field ── */}
+      <div className="form-row">
+        <label>
+          👤 Contact (Person)
+          {form.accountId && !form.contactId && (
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 6 }}>
+              showing contacts in {form.accountName}
+            </span>
+          )}
+        </label>
+        {form.contactId ? (
+          <div className="cf-selected-row">
+            <span>👤 <strong>{form.contactName}</strong></span>
+            {form.accountName && <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 6 }}>🏢 {form.accountName}</span>}
+            <button type="button" className="cf-clear-btn" onClick={() => {
+              setForm(prev => ({ ...prev, contactId: '', contactName: '' }))
+              setContactSearch('')
+            }}>✕</button>
+          </div>
+        ) : (
+          <div className="cf-search-wrap">
+            <input className="form-input"
+              placeholder={form.accountId ? `Search contacts in ${form.accountName}…` : 'Search or type contact name…'}
+              value={contactSearch}
+              onChange={e => { setContactSearch(e.target.value); setConError('') }} />
+            {contactSearch.trim() && conResults.length > 0 && (
+              <div className="cf-dropdown">
+                {conResults.map(c => (
+                  <div key={c.id} className="cf-dropdown-item" onClick={() => selectContact(c)}>
+                    <span>👤 {c.name}</span>
+                    {c.accountName && <span className="cf-dropdown-sub">🏢 {c.accountName}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {contactSearch.trim().length > 1 && !conExact && (
+              <button type="button" className="cf-create-btn" onClick={handleCreateContact} disabled={creatingCon}>
+                {creatingCon
+                  ? '⏳ Creating…'
+                  : form.accountId
+                    ? `➕ Create "${contactSearch.trim()}" under ${form.accountName}`
+                    : `➕ Create "${contactSearch.trim()}"`}
+              </button>
+            )}
+            {conError && <div className="form-error" style={{ marginTop: 4 }}>⚠️ {conError}</div>}
+          </div>
+        )}
+      </div>
+
       <div className="form-row">
         <label>Priority</label>
         <select className="form-input" value={form.priority} onChange={e => set('priority', e.target.value)}>

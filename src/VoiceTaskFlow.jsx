@@ -226,23 +226,47 @@ Rules:
   return parsed
 }
 
-/* ── Fuzzy-match a name string against a list of {id, name} records ── */
+/* ── Smart fuzzy search — scored matching for best results ──────────────────
+   Scoring (higher = better match):
+     100  exact match (case-insensitive)
+      80  starts with query
+      60  every query word appears in name
+      40  any query word appears in name  
+      20  name word starts with any query word
+   Returns results sorted by score descending, ties kept in original order.
+─────────────────────────────────────────────────────────────────────────── */
 function fuzzyMatch(query, list) {
   if (!query || !list?.length) return []
   const q = query.toLowerCase().trim()
-  // Exact match first
-  const exact = list.filter(r => r.name.toLowerCase() === q)
-  if (exact.length) return exact
-  // Partial word match — any word in query appears in name or vice versa
-  const words = q.split(/\s+/).filter(Boolean)
-  return list.filter(r => {
+  if (!q) return []
+
+  const qWords = q.split(/\s+/).filter(Boolean)
+
+  const scored = list.map(r => {
     const n = r.name.toLowerCase()
-    return words.some(w => n.includes(w)) || n.split(/\s+/).some(w => q.includes(w))
-  })
+    const nWords = n.split(/\s+/).filter(Boolean)
+
+    let score = 0
+    if (n === q)                                            score = 100 // exact
+    else if (n.startsWith(q))                               score = 80  // starts with full query
+    else if (qWords.every(w => n.includes(w)))              score = 60  // all words present
+    else if (qWords.some(w => n.includes(w)))               score = 40  // any word present
+    else if (nWords.some(nw => qWords.some(qw => nw.startsWith(qw)))) score = 20 // word prefix
+    else if (qWords.some(w => n.replace(/\s+/g, '').includes(w.replace(/\s+/g, '')))) score = 10 // collapsed
+
+    return { r, score }
+  }).filter(x => x.score > 0)
+
+  scored.sort((a, b) => b.score - a.score)
+  return scored.map(x => x.r)
 }
 
 /* ── Step labels ── */
-const CONFIRM_STEPS_BASE = ['name', 'assignee', 'account', 'contact', 'priority', 'dateStartDate', 'dateEndDate', 'description']
+// Base steps WITHOUT account/contact — those are inserted dynamically
+// based on which was mentioned in speech (mentioned one comes first)
+const STEPS_FIXED_START  = ['name', 'assignee']
+const STEPS_FIXED_END    = ['priority', 'dateStartDate', 'dateEndDate', 'description']
+const CONFIRM_STEPS_BASE = [...STEPS_FIXED_START, 'account', 'contact', ...STEPS_FIXED_END]
 
 function fieldLabel(step) {
   if (step === 'name') return 'Task Name'
@@ -677,71 +701,66 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       const currentAccounts = accountsRef.current
       const currentContacts = contactsRef.current
 
-      // ── Step 1: resolve what AI mentioned directly ──────────────────────
-      // Match logic:
-      //   0 matches  → leave null, step shown so user can search/create
-      //   1 match    → auto-select AND skip the confirm step
-      //   2+ matches → store candidates, step shown so user can pick
-      let preAccount = null
-      let preAccountCandidates = []
+      // ── Resolve what AI mentioned ─────────────────────────────────────
+      // 0 matches  → null + empty candidates → step shown (search/create)
+      // 1 match    → auto-selected           → step skipped
+      // 2+ matches → candidates stored       → step shown as choice list
+      let preAccount = null, preAccountCandidates = []
       if (mentionedAccount) {
-        const matches = fuzzyMatch(mentionedAccount, currentAccounts)
-        if (matches.length === 1)     preAccount = matches[0]
-        else if (matches.length > 1)  preAccountCandidates = matches
+        const m = fuzzyMatch(mentionedAccount, currentAccounts)
+        if (m.length === 1)     preAccount = m[0]
+        else if (m.length > 1)  preAccountCandidates = m
       }
 
-      let preContact = null
-      let preContactCandidates = []
+      let preContact = null, preContactCandidates = []
       if (mentionedContact) {
-        const matches = fuzzyMatch(mentionedContact, currentContacts)
-        if (matches.length === 1)     preContact = matches[0]
-        else if (matches.length > 1)  preContactCandidates = matches
+        const m = fuzzyMatch(mentionedContact, currentContacts)
+        if (m.length === 1)     preContact = m[0]
+        else if (m.length > 1)  preContactCandidates = m
       }
 
-      // ── Step 2: cross-link the other side when one is already resolved ──
-      //
-      // Case A: account resolved, no contact mentioned
-      //   → find all contacts that belong to this account
-      //   → if exactly 1 → auto-select contact too (both resolved, both steps skipped)
-      //   → if 2+       → show contact step as a choice list filtered to this account
-      //
-      // Case B: contact resolved, no account mentioned
-      //   → pull account straight from contact.accountId (already works)
-      //
-      // Case C: both resolved independently — nothing extra needed
-      if (preAccount && !preContact && !mentionedContact) {
-        const accountContacts = currentContacts.filter(c => c.accountId === preAccount.id)
-        if (accountContacts.length === 1) {
-          // Only one contact in this account → auto-link both silently
-          preContact = accountContacts[0]
-        } else if (accountContacts.length > 1) {
-          // Multiple contacts in this account → user must pick
-          preContactCandidates = accountContacts
+      // ── Cross-link: auto-fill the other side ──────────────────────────
+      // Contact resolved → pull its account
+      if (preContact && !preAccount) {
+        if (preContact.accountId) {
+          const acc = currentAccounts.find(a => a.id === preContact.accountId)
+          if (acc) preAccount = acc
         }
-        // 0 contacts in account → contact step stays empty so user can search/create
+      }
+      // Account resolved, no contact mentioned → check if only one contact belongs to it
+      if (preAccount && !preContact && !mentionedContact) {
+        const acctContacts = currentContacts.filter(c => c.accountId === preAccount.id)
+        if (acctContacts.length === 1)       preContact = acctContacts[0]
+        else if (acctContacts.length > 1)    preContactCandidates = acctContacts
       }
 
-      // Case B: contact resolved → inherit account automatically
-      if (preContact && !preAccount && preContact.accountId) {
-        const acc = currentAccounts.find(a => a.id === preContact.accountId)
-        if (acc) preAccount = acc
-      }
+      // ── Build dynamic step list ───────────────────────────────────────
+      // • Skip a step if already auto-resolved
+      // • Keep candidate steps (need user to pick) 
+      // • Order: whichever was spoken comes FIRST; if neither spoken, account before contact
+      const needsAccountStep  = !preAccount  // must show step (0 matches or 2+ candidates)
+      const needsContactStep  = !preContact
 
-      // ── Step 3: build dynamic step list — remove steps that are already resolved ──
-      const steps = CONFIRM_STEPS_BASE.filter(s => {
-        if (s === 'account') return !preAccount   // skip if resolved
-        if (s === 'contact') return !preContact   // skip if resolved (including cross-link)
-        return true
-      })
+      // Determine order based on what was spoken
+      let acctContactOrder
+      if (mentionedAccount && !mentionedContact)       acctContactOrder = ['account', 'contact']
+      else if (mentionedContact && !mentionedAccount)  acctContactOrder = ['contact', 'account']
+      else                                              acctContactOrder = ['account', 'contact'] // both or neither
+
+      const dynamicMiddle = acctContactOrder.filter(s =>
+        s === 'account' ? needsAccountStep : needsContactStep
+      )
+
+      const steps = [...STEPS_FIXED_START, ...dynamicMiddle, ...STEPS_FIXED_END]
 
       setEditValues({
         name: extracted.name || '',
-        assignedUsersIds: extracted.assignedUsersIds || [],
+        assignedUsersIds:  extracted.assignedUsersIds  || [],
         assignedUsersNames: extracted.assignedUsersNames || {},
-        description: extracted.description || '',
-        priority: extracted.priority || 'Normal',
+        description:  extracted.description  || '',
+        priority:     extracted.priority     || 'Normal',
         dateStartDate: extracted.dateStartDate || '',
-        dateEndDate: extracted.dateEndDate || '',
+        dateEndDate:   extracted.dateEndDate   || '',
         cMessage: langs.english || text,
         // Account
         accountId:            preAccount?.id   || '',
@@ -754,8 +773,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
         mentionedContactName: mentionedContact,
         contactCandidates:    preContactCandidates,
       })
-      setAccountSearch(mentionedAccount || (preAccount?.name || ''))
-      setContactSearch(mentionedContact || (preContact?.name || ''))
+      setAccountSearch(preAccount?.name || mentionedAccount || '')
+      setContactSearch(preContact?.name || mentionedContact || '')
       setConfirmSteps(steps)
       setConfirmStep(0)
       setPhase('confirm')
