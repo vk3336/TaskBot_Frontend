@@ -2323,6 +2323,130 @@ body {
   flex-wrap: wrap;
 }
 
+/* Create-new button — shown when typed name doesn't match existing records */
+.vf-create-new-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  background: rgba(16,185,129,0.08);
+  border: 1px dashed rgba(16,185,129,0.4);
+  color: #34d399;
+  text-align: left;
+}
+.vf-create-new-btn:hover:not(:disabled) {
+  background: rgba(16,185,129,0.16);
+  border-color: rgba(16,185,129,0.6);
+  transform: translateY(-1px);
+}
+.vf-create-new-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Info note — shown when a field is auto-filled from another field */
+.vf-info-note {
+  background: rgba(99,102,241,0.08);
+  border: 1px solid rgba(99,102,241,0.2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--indigo-light);
+  margin-bottom: 10px;
+}
+
+/* Auto-filled indicator under a selected contact */
+.vf-auto-filled {
+  background: rgba(16,185,129,0.07);
+  border: 1px solid rgba(16,185,129,0.2);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: #34d399;
+  margin-top: 6px;
+  margin-bottom: 2px;
+}
+
+/* Sub-text inside dropdown item (e.g. account name under contact name) */
+.vf-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vf-dropdown-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* ── Candidate choice list — shown when AI finds 2+ matches ── */
+.vf-candidates-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.vf-candidates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.vf-candidate-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.vf-candidate-btn:hover {
+  background: rgba(99,102,241,0.12);
+  border-color: rgba(99,102,241,0.35);
+  color: var(--indigo-light);
+  transform: translateY(-1px);
+}
+
+.vf-candidate-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.vf-search-instead-btn {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.vf-search-instead-btn:hover {
+  color: var(--text-secondary);
+}
+
 /* Skip button */
 .vf-btn-skip {
   display: flex;

@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import lamejs from 'lamejs'
 
-const OPENAI_KEY = import.meta.env.VITE_CHATGPT_KEY
-const USERS_API = import.meta.env.VITE_USERS_API
-const ACCOUNT_API = import.meta.env.VITE_ACCOUNT_API
-const CONTACT_API = import.meta.env.VITE_CONTACT_API
+const OPENAI_KEY   = import.meta.env.VITE_CHATGPT_KEY
+const USERS_API    = import.meta.env.VITE_USERS_API
+const ACCOUNT_API  = import.meta.env.VITE_ACCOUNT_API
+const CONTACT_API  = import.meta.env.VITE_CONTACT_API
 
 /* ── helpers ── */
 async function fetchUsers() {
@@ -28,7 +28,32 @@ async function fetchContacts() {
   const res = await fetch(CONTACT_API)
   if (!res.ok) return []
   const json = await res.json()
+  // Each contact has { id, name, accountId, accountName }
   return json.data || []
+}
+
+// POST a new account to the backend
+async function apiCreateAccount(name) {
+  const res = await fetch(ACCOUNT_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  const json = await res.json()
+  if (!res.ok) throw new Error(json.message || `Server error ${res.status}`)
+  return json.data // { id, name }
+}
+
+// POST a new contact to the backend (optionally linked to an account)
+async function apiCreateContact(name, accountId) {
+  const res = await fetch(CONTACT_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, accountId: accountId || undefined }),
+  })
+  const json = await res.json()
+  if (!res.ok) throw new Error(json.message || `Server error ${res.status}`)
+  return json.data // { id, name, accountId, accountName }
 }
 
 async function transcribeAudio(audioBlob) {
@@ -217,7 +242,7 @@ function fuzzyMatch(query, list) {
 }
 
 /* ── Step labels ── */
-const CONFIRM_STEPS = ['name', 'assignee', 'account', 'contact', 'priority', 'dateStartDate', 'dateEndDate', 'description']
+const CONFIRM_STEPS_BASE = ['name', 'assignee', 'account', 'contact', 'priority', 'dateStartDate', 'dateEndDate', 'description']
 
 function fieldLabel(step) {
   if (step === 'name') return 'Task Name'
@@ -342,6 +367,249 @@ function useRecorder(onError) {
   return { recording, audioBlob, audioURL, converting, start, stop }
 }
 
+/* ── AccountStep — search existing or create new; auto-fills contact's account ── */
+function AccountStep({ editValues, setEditValues, accounts, setAccounts, contacts, accountSearch, setAccountSearch, setContactSearch, onConfirm, onSkip }) {
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState('')
+
+  // If a contact is already linked, derive the account from it
+  const lockedByContact = !!(editValues.contactId && editValues.accountId)
+
+  // Candidates = AI found 2+ matches → show as a choice list first
+  const candidates = editValues.accountCandidates || []
+  const inCandidateMode = candidates.length > 1 && !editValues.accountId
+
+  const results = accountSearch.trim()
+    ? fuzzyMatch(accountSearch, accounts).slice(0, 10)
+    : accounts.slice(0, 10)
+
+  const exactExists = accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase())
+  const showCreate  = accountSearch.trim().length > 1 && !exactExists && !editValues.accountId && !inCandidateMode
+
+  const selectAccount = (a) => {
+    setEditValues(v => ({ ...v, accountId: a.id, accountName: a.name, accountCandidates: [] }))
+    setAccountSearch(a.name)
+  }
+
+  const handleCreate = async () => {
+    setCreating(true)
+    setCreateError('')
+    try {
+      const newAcc = await apiCreateAccount(accountSearch.trim())
+      setAccounts(prev => [...prev, newAcc])
+      selectAccount(newAcc)
+    } catch (e) {
+      setCreateError(e.message)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div className="vf-edit-area">
+      {lockedByContact && (
+        <div className="vf-info-note">
+          🔗 Auto-filled from selected contact — <strong>{editValues.contactName}</strong>
+        </div>
+      )}
+
+      {editValues.accountId ? (
+        <div className="vf-selected-badge">
+          🏢 <strong>{editValues.accountName}</strong>
+          {!lockedByContact && (
+            <button className="vf-clear-btn" onClick={() => {
+              setEditValues(v => ({ ...v, accountId: '', accountName: '' }))
+              setAccountSearch('')
+            }}>✕</button>
+          )}
+        </div>
+      ) : inCandidateMode ? (
+        /* ── Multiple matches found by AI — show choice list ── */
+        <>
+          <div className="vf-candidates-label">
+            🤔 Multiple accounts match <strong>"{editValues.mentionedAccountName}"</strong> — pick one:
+          </div>
+          <div className="vf-candidates-list">
+            {candidates.map(a => (
+              <button key={a.id} className="vf-candidate-btn" onClick={() => selectAccount(a)}>
+                🏢 {a.name}
+              </button>
+            ))}
+          </div>
+          <button className="vf-search-instead-btn" onClick={() =>
+            setEditValues(v => ({ ...v, accountCandidates: [] }))
+          }>🔍 Search instead</button>
+        </>
+      ) : (
+        <>
+          <input
+            className="vf-input"
+            placeholder="Search or type company name…"
+            value={accountSearch}
+            onChange={e => { setAccountSearch(e.target.value); setCreateError('') }}
+            autoFocus
+          />
+          {results.length > 0 && (
+            <div className="vf-dropdown">
+              {results.map(a => (
+                <div key={a.id} className="vf-dropdown-item" onClick={() => selectAccount(a)}>
+                  🏢 {a.name}
+                </div>
+              ))}
+            </div>
+          )}
+          {showCreate && (
+            <button className="vf-create-new-btn" onClick={handleCreate} disabled={creating}>
+              {creating ? '⏳ Creating…' : `➕ Create "${accountSearch.trim()}" as new account`}
+            </button>
+          )}
+          {createError && <div className="vf-error" style={{ marginTop: 6 }}>⚠️ {createError}</div>}
+        </>
+      )}
+
+      <div className="vf-action-row">
+        <button className="vf-btn-yes" onClick={onConfirm} disabled={!editValues.accountId}>
+          ✅ Confirm
+        </button>
+        <button className="vf-btn-skip" onClick={onSkip}>⏭ Skip</button>
+      </div>
+    </div>
+  )
+}
+
+/* ── ContactStep — search existing or create new; auto-fills account ── */
+function ContactStep({ editValues, setEditValues, contacts, setContacts, accounts, contactSearch, setContactSearch, setAccountSearch, onConfirm, onSkip }) {
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState('')
+
+  // Candidates = AI found 2+ matches → show as a choice list first
+  const candidates = editValues.contactCandidates || []
+  const inCandidateMode = candidates.length > 1 && !editValues.contactId
+
+  // If account is already selected, filter contacts to that account first
+  const filteredContacts = editValues.accountId
+    ? contacts.filter(c => c.accountId === editValues.accountId)
+    : contacts
+
+  const results = contactSearch.trim()
+    ? fuzzyMatch(contactSearch, filteredContacts).slice(0, 10)
+    : filteredContacts.slice(0, 10)
+
+  const exactExists = contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
+  const showCreate  = contactSearch.trim().length > 1 && !exactExists && !editValues.contactId && !inCandidateMode
+
+  const selectContact = (c) => {
+    setEditValues(v => {
+      const updated = { ...v, contactId: c.id, contactName: c.name, contactCandidates: [] }
+      // Auto-fill account from this contact if not already set
+      if (c.accountId && !v.accountId) {
+        updated.accountId   = c.accountId
+        updated.accountName = c.accountName || ''
+        setAccountSearch(c.accountName || '')
+      }
+      return updated
+    })
+    setContactSearch(c.name)
+  }
+
+  const handleCreate = async () => {
+    setCreating(true)
+    setCreateError('')
+    try {
+      const newContact = await apiCreateContact(contactSearch.trim(), editValues.accountId || undefined)
+      setContacts(prev => [...prev, newContact])
+      selectContact(newContact)
+    } catch (e) {
+      setCreateError(e.message)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div className="vf-edit-area">
+      {editValues.accountId && !inCandidateMode && (
+        <div className="vf-info-note">
+          🔍 Showing contacts for <strong>{editValues.accountName}</strong>
+          {filteredContacts.length === 0 && ' — no contacts yet'}
+        </div>
+      )}
+
+      {editValues.contactId ? (
+        <>
+          <div className="vf-selected-badge">
+            👤 <strong>{editValues.contactName}</strong>
+            <button className="vf-clear-btn" onClick={() => {
+              setEditValues(v => ({ ...v, contactId: '', contactName: '' }))
+              setContactSearch('')
+            }}>✕</button>
+          </div>
+          {editValues.accountId && (
+            <div className="vf-auto-filled">
+              🏢 Account auto-filled: <strong>{editValues.accountName}</strong>
+            </div>
+          )}
+        </>
+      ) : inCandidateMode ? (
+        /* ── Multiple matches found by AI — show choice list ── */
+        <>
+          <div className="vf-candidates-label">
+            🤔 Multiple contacts match <strong>"{editValues.mentionedContactName}"</strong> — pick one:
+          </div>
+          <div className="vf-candidates-list">
+            {candidates.map(c => (
+              <button key={c.id} className="vf-candidate-btn" onClick={() => selectContact(c)}>
+                <span>👤 {c.name}</span>
+                {c.accountName && <span className="vf-candidate-sub">🏢 {c.accountName}</span>}
+              </button>
+            ))}
+          </div>
+          <button className="vf-search-instead-btn" onClick={() =>
+            setEditValues(v => ({ ...v, contactCandidates: [] }))
+          }>🔍 Search instead</button>
+        </>
+      ) : (
+        <>
+          <input
+            className="vf-input"
+            placeholder={editValues.accountId ? `Search contacts in ${editValues.accountName}…` : 'Search or type contact name…'}
+            value={contactSearch}
+            onChange={e => { setContactSearch(e.target.value); setCreateError('') }}
+            autoFocus
+          />
+          {results.length > 0 && (
+            <div className="vf-dropdown">
+              {results.map(c => (
+                <div key={c.id} className="vf-dropdown-item" onClick={() => selectContact(c)}>
+                  <span>👤 {c.name}</span>
+                  {c.accountName && <span className="vf-dropdown-sub">🏢 {c.accountName}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {showCreate && (
+            <button className="vf-create-new-btn" onClick={handleCreate} disabled={creating}>
+              {creating
+                ? '⏳ Creating…'
+                : editValues.accountId
+                  ? `➕ Create "${contactSearch.trim()}" under ${editValues.accountName}`
+                  : `➕ Create "${contactSearch.trim()}" as new contact`}
+            </button>
+          )}
+          {createError && <div className="vf-error" style={{ marginTop: 6 }}>⚠️ {createError}</div>}
+        </>
+      )}
+
+      <div className="vf-action-row">
+        <button className="vf-btn-yes" onClick={onConfirm} disabled={!editValues.contactId}>
+          ✅ Confirm
+        </button>
+        <button className="vf-btn-skip" onClick={onSkip}>⏭ Skip</button>
+      </div>
+    </div>
+  )
+}
+
 /* ── Main VoiceTaskFlow component ── */
 export default function VoiceTaskFlow({ onDone, onCancel }) {
   const [phase, setPhase] = useState('record')
@@ -352,6 +620,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   const accountsRef = useRef([])
   const contactsRef = useRef([])
   const [usersLoading, setUsersLoading] = useState(true)
+  // confirmSteps is dynamic — account/contact steps are removed when auto-resolved
+  const [confirmSteps, setConfirmSteps] = useState(CONFIRM_STEPS_BASE)
   const [confirmStep, setConfirmStep] = useState(0)
   const [editValues, setEditValues] = useState({})
   const [transcript, setTranscript] = useState('')
@@ -407,16 +677,62 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       const currentAccounts = accountsRef.current
       const currentContacts = contactsRef.current
 
+      // ── Step 1: resolve what AI mentioned directly ──────────────────────
+      // Match logic:
+      //   0 matches  → leave null, step shown so user can search/create
+      //   1 match    → auto-select AND skip the confirm step
+      //   2+ matches → store candidates, step shown so user can pick
       let preAccount = null
-      let preContact = null
+      let preAccountCandidates = []
       if (mentionedAccount) {
         const matches = fuzzyMatch(mentionedAccount, currentAccounts)
-        if (matches.length === 1) preAccount = matches[0]
+        if (matches.length === 1)     preAccount = matches[0]
+        else if (matches.length > 1)  preAccountCandidates = matches
       }
+
+      let preContact = null
+      let preContactCandidates = []
       if (mentionedContact) {
         const matches = fuzzyMatch(mentionedContact, currentContacts)
-        if (matches.length === 1) preContact = matches[0]
+        if (matches.length === 1)     preContact = matches[0]
+        else if (matches.length > 1)  preContactCandidates = matches
       }
+
+      // ── Step 2: cross-link the other side when one is already resolved ──
+      //
+      // Case A: account resolved, no contact mentioned
+      //   → find all contacts that belong to this account
+      //   → if exactly 1 → auto-select contact too (both resolved, both steps skipped)
+      //   → if 2+       → show contact step as a choice list filtered to this account
+      //
+      // Case B: contact resolved, no account mentioned
+      //   → pull account straight from contact.accountId (already works)
+      //
+      // Case C: both resolved independently — nothing extra needed
+      if (preAccount && !preContact && !mentionedContact) {
+        const accountContacts = currentContacts.filter(c => c.accountId === preAccount.id)
+        if (accountContacts.length === 1) {
+          // Only one contact in this account → auto-link both silently
+          preContact = accountContacts[0]
+        } else if (accountContacts.length > 1) {
+          // Multiple contacts in this account → user must pick
+          preContactCandidates = accountContacts
+        }
+        // 0 contacts in account → contact step stays empty so user can search/create
+      }
+
+      // Case B: contact resolved → inherit account automatically
+      if (preContact && !preAccount && preContact.accountId) {
+        const acc = currentAccounts.find(a => a.id === preContact.accountId)
+        if (acc) preAccount = acc
+      }
+
+      // ── Step 3: build dynamic step list — remove steps that are already resolved ──
+      const steps = CONFIRM_STEPS_BASE.filter(s => {
+        if (s === 'account') return !preAccount   // skip if resolved
+        if (s === 'contact') return !preContact   // skip if resolved (including cross-link)
+        return true
+      })
 
       setEditValues({
         name: extracted.name || '',
@@ -426,20 +742,21 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
         priority: extracted.priority || 'Normal',
         dateStartDate: extracted.dateStartDate || '',
         dateEndDate: extracted.dateEndDate || '',
-        // Store English transcript in cMessage field
         cMessage: langs.english || text,
-        // Account fields
-        accountId: preAccount?.id || '',
-        accountName: preAccount?.name || '',
+        // Account
+        accountId:            preAccount?.id   || '',
+        accountName:          preAccount?.name || '',
         mentionedAccountName: mentionedAccount,
-        // Contact fields
-        contactId: preContact?.id || '',
-        contactName: preContact?.name || '',
+        accountCandidates:    preAccountCandidates,
+        // Contact
+        contactId:            preContact?.id   || '',
+        contactName:          preContact?.name || '',
         mentionedContactName: mentionedContact,
+        contactCandidates:    preContactCandidates,
       })
-      // Pre-fill search boxes with extracted names so user sees relevant suggestions
-      setAccountSearch(mentionedAccount || '')
-      setContactSearch(mentionedContact || '')
+      setAccountSearch(mentionedAccount || (preAccount?.name || ''))
+      setContactSearch(mentionedContact || (preContact?.name || ''))
+      setConfirmSteps(steps)
       setConfirmStep(0)
       setPhase('confirm')
     } catch (e) {
@@ -490,14 +807,14 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
   const handleConfirmYes = () => {
     setEditMode(false)
-    if (confirmStep < CONFIRM_STEPS.length - 1) setConfirmStep(s => s + 1)
+    if (confirmStep < confirmSteps.length - 1) setConfirmStep(s => s + 1)
     else setPhase('preview')
   }
 
   // Skip optional steps (account / contact)
   const handleSkipStep = () => {
     setEditMode(false)
-    const step = CONFIRM_STEPS[confirmStep]
+    const step = confirmSteps[confirmStep]
     if (step === 'account') {
       setEditValues(v => ({ ...v, accountId: '', accountName: '' }))
       setAccountSearch('')
@@ -505,21 +822,21 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       setEditValues(v => ({ ...v, contactId: '', contactName: '' }))
       setContactSearch('')
     }
-    if (confirmStep < CONFIRM_STEPS.length - 1) setConfirmStep(s => s + 1)
+    if (confirmStep < confirmSteps.length - 1) setConfirmStep(s => s + 1)
     else setPhase('preview')
   }
 
   const handleConfirmEdit = () => {
-    const step = CONFIRM_STEPS[confirmStep]
+    const step = confirmSteps[confirmStep]
     if (step !== 'assignee') setEditInput(editValues[step] || '')
     setEditMode(true)
   }
 
   const handleEditSave = () => {
-    const step = CONFIRM_STEPS[confirmStep]
+    const step = confirmSteps[confirmStep]
     if (step !== 'assignee') setEditValues(v => ({ ...v, [step]: editInput }))
     setEditMode(false)
-    if (confirmStep < CONFIRM_STEPS.length - 1) setConfirmStep(s => s + 1)
+    if (confirmStep < confirmSteps.length - 1) setConfirmStep(s => s + 1)
     else setPhase('preview')
   }
 
@@ -541,11 +858,11 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       priority: editValues.priority || 'Normal',
       dateStartDate: editValues.dateStartDate || undefined,
       dateEndDate: editValues.dateEndDate || undefined,
-      // Store English transcript in EspoCRM cMessage field
       cMessage: editValues.cMessage || undefined,
-      // Optional account/contact links
-      accountId: editValues.accountId || undefined,
+      // Contact takes priority — backend resolves parentType=Contact (gives both account+contact)
+      // If only account selected — backend resolves parentType=Account
       contactId: editValues.contactId || undefined,
+      accountId: editValues.accountId || undefined,
     }
     Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k])
     onDone(payload, audioBlobRef.current)
@@ -582,7 +899,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
   /* ── Render: confirm step-by-step ── */
   if (phase === 'confirm') {
-    const step = CONFIRM_STEPS[confirmStep]
+    const step = confirmSteps[confirmStep]
     const label = fieldLabel(step)
     const isOptional = step === 'account' || step === 'contact'
 
@@ -596,18 +913,10 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     else if (step === 'contact') displayValue = editValues.contactName || '(none)'
     else displayValue = editValues[step] || '(not set)'
 
-    // Filtered lists for dropdowns based on search text
-    const accountResults = accountSearch.trim()
-      ? fuzzyMatch(accountSearch, accounts).slice(0, 10)
-      : accounts.slice(0, 10)
-    const contactResults = contactSearch.trim()
-      ? fuzzyMatch(contactSearch, contacts).slice(0, 10)
-      : contacts.slice(0, 10)
-
     return (
       <div className="vf-container">
         <div className="vf-confirm-header">
-          <span className="vf-step-badge">{confirmStep + 1}/{CONFIRM_STEPS.length}</span>
+          <span className="vf-step-badge">{confirmStep + 1}/{confirmSteps.length}</span>
           <span className="vf-step-title">Confirm Task Details</span>
           {isOptional && <span className="vf-optional-badge">Optional</span>}
         </div>
@@ -643,86 +952,32 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
           {/* ── Account step ── */}
           {step === 'account' ? (
-            <div className="vf-edit-area">
-              {editValues.accountId ? (
-                <div className="vf-selected-badge">
-                  🏢 <strong>{editValues.accountName}</strong>
-                  <button className="vf-clear-btn" onClick={() => {
-                    setEditValues(v => ({ ...v, accountId: '', accountName: '' }))
-                    setAccountSearch('')
-                  }}>✕</button>
-                </div>
-              ) : (
-                <>
-                  <input
-                    className="vf-input"
-                    placeholder="Search account / company name…"
-                    value={accountSearch}
-                    onChange={e => setAccountSearch(e.target.value)}
-                    autoFocus
-                  />
-                  {accountResults.length > 0 && (
-                    <div className="vf-dropdown">
-                      {accountResults.map(a => (
-                        <div key={a.id} className="vf-dropdown-item" onClick={() => {
-                          setEditValues(v => ({ ...v, accountId: a.id, accountName: a.name }))
-                          setAccountSearch(a.name)
-                        }}>
-                          🏢 {a.name}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-              <div className="vf-action-row">
-                <button className="vf-btn-yes" onClick={handleConfirmYes} disabled={!editValues.accountId}>
-                  ✅ Confirm
-                </button>
-                <button className="vf-btn-skip" onClick={handleSkipStep}>⏭ Skip</button>
-              </div>
-            </div>
+            <AccountStep
+              editValues={editValues}
+              setEditValues={setEditValues}
+              accounts={accounts}
+              setAccounts={setAccounts}
+              contacts={contacts}
+              accountSearch={accountSearch}
+              setAccountSearch={setAccountSearch}
+              setContactSearch={setContactSearch}
+              onConfirm={handleConfirmYes}
+              onSkip={handleSkipStep}
+            />
           ) : step === 'contact' ? (
             /* ── Contact step ── */
-            <div className="vf-edit-area">
-              {editValues.contactId ? (
-                <div className="vf-selected-badge">
-                  👤 <strong>{editValues.contactName}</strong>
-                  <button className="vf-clear-btn" onClick={() => {
-                    setEditValues(v => ({ ...v, contactId: '', contactName: '' }))
-                    setContactSearch('')
-                  }}>✕</button>
-                </div>
-              ) : (
-                <>
-                  <input
-                    className="vf-input"
-                    placeholder="Search contact / person name…"
-                    value={contactSearch}
-                    onChange={e => setContactSearch(e.target.value)}
-                    autoFocus
-                  />
-                  {contactResults.length > 0 && (
-                    <div className="vf-dropdown">
-                      {contactResults.map(c => (
-                        <div key={c.id} className="vf-dropdown-item" onClick={() => {
-                          setEditValues(v => ({ ...v, contactId: c.id, contactName: c.name }))
-                          setContactSearch(c.name)
-                        }}>
-                          👤 {c.name}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-              <div className="vf-action-row">
-                <button className="vf-btn-yes" onClick={handleConfirmYes} disabled={!editValues.contactId}>
-                  ✅ Confirm
-                </button>
-                <button className="vf-btn-skip" onClick={handleSkipStep}>⏭ Skip</button>
-              </div>
-            </div>
+            <ContactStep
+              editValues={editValues}
+              setEditValues={setEditValues}
+              contacts={contacts}
+              setContacts={setContacts}
+              accounts={accounts}
+              contactSearch={contactSearch}
+              setContactSearch={setContactSearch}
+              setAccountSearch={setAccountSearch}
+              onConfirm={handleConfirmYes}
+              onSkip={handleSkipStep}
+            />
           ) : editMode ? (
             /* ── Regular edit modes ── */
             step === 'assignee' ? (
