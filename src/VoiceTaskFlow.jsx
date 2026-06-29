@@ -3,12 +3,30 @@ import lamejs from 'lamejs'
 
 const OPENAI_KEY = import.meta.env.VITE_CHATGPT_KEY
 const USERS_API = import.meta.env.VITE_USERS_API
+const ACCOUNT_API = import.meta.env.VITE_ACCOUNT_API
+const CONTACT_API = import.meta.env.VITE_CONTACT_API
 
 /* ── helpers ── */
 async function fetchUsers() {
   if (!USERS_API) throw new Error('VITE_USERS_API is not set in .env.local')
   const res = await fetch(USERS_API)
   if (!res.ok) throw new Error(`Server error ${res.status}`)
+  const json = await res.json()
+  return json.data || []
+}
+
+async function fetchAccounts() {
+  if (!ACCOUNT_API) return []
+  const res = await fetch(ACCOUNT_API)
+  if (!res.ok) return []
+  const json = await res.json()
+  return json.data || []
+}
+
+async function fetchContacts() {
+  if (!CONTACT_API) return []
+  const res = await fetch(CONTACT_API)
+  if (!res.ok) return []
   const json = await res.json()
   return json.data || []
 }
@@ -134,7 +152,9 @@ Extract and return ONLY a valid JSON object with these fields:
   "priority": "Low | Normal | High | Urgent — infer from context, default Normal",
   "dateStartDate": "YYYY-MM-DD or null",
   "dateEndDate": "YYYY-MM-DD or null",
-  "description": "See formatting rules below"
+  "description": "See formatting rules below",
+  "mentionedAccountName": "the company/account name mentioned in the transcript, or null if none",
+  "mentionedContactName": "the person/contact name mentioned (other than assignees) in the transcript, or null if none"
 }
 
 Description formatting rules — make it easy to read and act on:
@@ -154,6 +174,8 @@ Description formatting rules — make it easy to read and act on:
 Rules:
 - Match assignee names loosely (e.g. "ali" → match closest user). Multiple names may be mentioned.
 - Today is ${new Date().toISOString().split('T')[0]}; interpret relative date terms
+- For mentionedAccountName: extract any company, firm, or organisation name from the transcript (e.g. "Vimko Textiles", "Reliance Industries")
+- For mentionedContactName: extract the name of a person the task is about or directed to (not the assignee)
 - Return ONLY the JSON object, no markdown code fences, no explanation`
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -179,8 +201,23 @@ Rules:
   return parsed
 }
 
+/* ── Fuzzy-match a name string against a list of {id, name} records ── */
+function fuzzyMatch(query, list) {
+  if (!query || !list?.length) return []
+  const q = query.toLowerCase().trim()
+  // Exact match first
+  const exact = list.filter(r => r.name.toLowerCase() === q)
+  if (exact.length) return exact
+  // Partial word match — any word in query appears in name or vice versa
+  const words = q.split(/\s+/).filter(Boolean)
+  return list.filter(r => {
+    const n = r.name.toLowerCase()
+    return words.some(w => n.includes(w)) || n.split(/\s+/).some(w => q.includes(w))
+  })
+}
+
 /* ── Step labels ── */
-const CONFIRM_STEPS = ['name', 'assignee', 'priority', 'dateStartDate', 'dateEndDate', 'description']
+const CONFIRM_STEPS = ['name', 'assignee', 'account', 'contact', 'priority', 'dateStartDate', 'dateEndDate', 'description']
 
 function fieldLabel(step) {
   if (step === 'name') return 'Task Name'
@@ -189,6 +226,8 @@ function fieldLabel(step) {
   if (step === 'priority') return 'Priority'
   if (step === 'dateStartDate') return 'Start Date'
   if (step === 'dateEndDate') return 'Due Date'
+  if (step === 'account') return 'Link Account (Company)'
+  if (step === 'contact') return 'Link Contact (Person)'
   return step
 }
 
@@ -308,6 +347,10 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   const [phase, setPhase] = useState('record')
   const [error, setError] = useState('')
   const [users, setUsers] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [contacts, setContacts] = useState([])
+  const accountsRef = useRef([])
+  const contactsRef = useRef([])
   const [usersLoading, setUsersLoading] = useState(true)
   const [confirmStep, setConfirmStep] = useState(0)
   const [editValues, setEditValues] = useState({})
@@ -316,6 +359,9 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   const [transcriptLangs, setTranscriptLangs] = useState(null)
   const [editMode, setEditMode] = useState(false)
   const [editInput, setEditInput] = useState('')
+  // account/contact dropdown search
+  const [accountSearch, setAccountSearch] = useState('')
+  const [contactSearch, setContactSearch] = useState('')
   // Fix #2: track audio presence in state so JSX reads state, not ref directly
   const [hasAudio, setHasAudio] = useState(false)
   const audioBlobRef = useRef(null)
@@ -327,6 +373,9 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     fetchUsers()
       .then(d => { setUsers(d); setUsersLoading(false) })
       .catch(err => { setError(`Failed to load users: ${err.message}`); setUsersLoading(false) })
+    // Load accounts and contacts in background — non-blocking
+    fetchAccounts().then(d => { setAccounts(d); accountsRef.current = d }).catch(() => {})
+    fetchContacts().then(d => { setContacts(d); contactsRef.current = d }).catch(() => {})
   }, [])
 
   const processAudio = async (blob, currentUsers) => {
@@ -349,6 +398,26 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
       // Reject if GPT assigned users that don't exist in the team
       validateAssignedUsers(extracted, currentUsers)
+
+      // Pre-match account and contact from extracted names
+      const mentionedAccount = extracted.mentionedAccountName || ''
+      const mentionedContact = extracted.mentionedContactName || ''
+
+      // Use refs to get fresh accounts/contacts (avoids stale closure)
+      const currentAccounts = accountsRef.current
+      const currentContacts = contactsRef.current
+
+      let preAccount = null
+      let preContact = null
+      if (mentionedAccount) {
+        const matches = fuzzyMatch(mentionedAccount, currentAccounts)
+        if (matches.length === 1) preAccount = matches[0]
+      }
+      if (mentionedContact) {
+        const matches = fuzzyMatch(mentionedContact, currentContacts)
+        if (matches.length === 1) preContact = matches[0]
+      }
+
       setEditValues({
         name: extracted.name || '',
         assignedUsersIds: extracted.assignedUsersIds || [],
@@ -359,7 +428,18 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
         dateEndDate: extracted.dateEndDate || '',
         // Store English transcript in cMessage field
         cMessage: langs.english || text,
+        // Account fields
+        accountId: preAccount?.id || '',
+        accountName: preAccount?.name || '',
+        mentionedAccountName: mentionedAccount,
+        // Contact fields
+        contactId: preContact?.id || '',
+        contactName: preContact?.name || '',
+        mentionedContactName: mentionedContact,
       })
+      // Pre-fill search boxes with extracted names so user sees relevant suggestions
+      setAccountSearch(mentionedAccount || '')
+      setContactSearch(mentionedContact || '')
       setConfirmStep(0)
       setPhase('confirm')
     } catch (e) {
@@ -414,6 +494,21 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
     else setPhase('preview')
   }
 
+  // Skip optional steps (account / contact)
+  const handleSkipStep = () => {
+    setEditMode(false)
+    const step = CONFIRM_STEPS[confirmStep]
+    if (step === 'account') {
+      setEditValues(v => ({ ...v, accountId: '', accountName: '' }))
+      setAccountSearch('')
+    } else if (step === 'contact') {
+      setEditValues(v => ({ ...v, contactId: '', contactName: '' }))
+      setContactSearch('')
+    }
+    if (confirmStep < CONFIRM_STEPS.length - 1) setConfirmStep(s => s + 1)
+    else setPhase('preview')
+  }
+
   const handleConfirmEdit = () => {
     const step = CONFIRM_STEPS[confirmStep]
     if (step !== 'assignee') setEditInput(editValues[step] || '')
@@ -448,6 +543,9 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       dateEndDate: editValues.dateEndDate || undefined,
       // Store English transcript in EspoCRM cMessage field
       cMessage: editValues.cMessage || undefined,
+      // Optional account/contact links
+      accountId: editValues.accountId || undefined,
+      contactId: editValues.contactId || undefined,
     }
     Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k])
     onDone(payload, audioBlobRef.current)
@@ -486,21 +584,32 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   if (phase === 'confirm') {
     const step = CONFIRM_STEPS[confirmStep]
     const label = fieldLabel(step)
-    const displayValue = step === 'assignee'
-      ? getAssigneeDisplay(editValues)
-      : step === 'priority'
-      ? (editValues.priority || 'Normal')
-      : step === 'dateStartDate'
-      ? (editValues.dateStartDate || '(not set)')
-      : step === 'dateEndDate'
-      ? (editValues.dateEndDate || '(not set)')
-      : (editValues[step] || '(not set)')
+    const isOptional = step === 'account' || step === 'contact'
+
+    // Compute display value for non-edit mode
+    let displayValue
+    if (step === 'assignee') displayValue = getAssigneeDisplay(editValues)
+    else if (step === 'priority') displayValue = editValues.priority || 'Normal'
+    else if (step === 'dateStartDate') displayValue = editValues.dateStartDate || '(not set)'
+    else if (step === 'dateEndDate') displayValue = editValues.dateEndDate || '(not set)'
+    else if (step === 'account') displayValue = editValues.accountName || '(none)'
+    else if (step === 'contact') displayValue = editValues.contactName || '(none)'
+    else displayValue = editValues[step] || '(not set)'
+
+    // Filtered lists for dropdowns based on search text
+    const accountResults = accountSearch.trim()
+      ? fuzzyMatch(accountSearch, accounts).slice(0, 10)
+      : accounts.slice(0, 10)
+    const contactResults = contactSearch.trim()
+      ? fuzzyMatch(contactSearch, contacts).slice(0, 10)
+      : contacts.slice(0, 10)
 
     return (
       <div className="vf-container">
         <div className="vf-confirm-header">
           <span className="vf-step-badge">{confirmStep + 1}/{CONFIRM_STEPS.length}</span>
           <span className="vf-step-title">Confirm Task Details</span>
+          {isOptional && <span className="vf-optional-badge">Optional</span>}
         </div>
 
         {(transcript || transcriptLangs) && (
@@ -531,7 +640,91 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
         <div className="vf-field-card">
           <div className="vf-field-label">{label}</div>
-          {editMode ? (
+
+          {/* ── Account step ── */}
+          {step === 'account' ? (
+            <div className="vf-edit-area">
+              {editValues.accountId ? (
+                <div className="vf-selected-badge">
+                  🏢 <strong>{editValues.accountName}</strong>
+                  <button className="vf-clear-btn" onClick={() => {
+                    setEditValues(v => ({ ...v, accountId: '', accountName: '' }))
+                    setAccountSearch('')
+                  }}>✕</button>
+                </div>
+              ) : (
+                <>
+                  <input
+                    className="vf-input"
+                    placeholder="Search account / company name…"
+                    value={accountSearch}
+                    onChange={e => setAccountSearch(e.target.value)}
+                    autoFocus
+                  />
+                  {accountResults.length > 0 && (
+                    <div className="vf-dropdown">
+                      {accountResults.map(a => (
+                        <div key={a.id} className="vf-dropdown-item" onClick={() => {
+                          setEditValues(v => ({ ...v, accountId: a.id, accountName: a.name }))
+                          setAccountSearch(a.name)
+                        }}>
+                          🏢 {a.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="vf-action-row">
+                <button className="vf-btn-yes" onClick={handleConfirmYes} disabled={!editValues.accountId}>
+                  ✅ Confirm
+                </button>
+                <button className="vf-btn-skip" onClick={handleSkipStep}>⏭ Skip</button>
+              </div>
+            </div>
+          ) : step === 'contact' ? (
+            /* ── Contact step ── */
+            <div className="vf-edit-area">
+              {editValues.contactId ? (
+                <div className="vf-selected-badge">
+                  👤 <strong>{editValues.contactName}</strong>
+                  <button className="vf-clear-btn" onClick={() => {
+                    setEditValues(v => ({ ...v, contactId: '', contactName: '' }))
+                    setContactSearch('')
+                  }}>✕</button>
+                </div>
+              ) : (
+                <>
+                  <input
+                    className="vf-input"
+                    placeholder="Search contact / person name…"
+                    value={contactSearch}
+                    onChange={e => setContactSearch(e.target.value)}
+                    autoFocus
+                  />
+                  {contactResults.length > 0 && (
+                    <div className="vf-dropdown">
+                      {contactResults.map(c => (
+                        <div key={c.id} className="vf-dropdown-item" onClick={() => {
+                          setEditValues(v => ({ ...v, contactId: c.id, contactName: c.name }))
+                          setContactSearch(c.name)
+                        }}>
+                          👤 {c.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="vf-action-row">
+                <button className="vf-btn-yes" onClick={handleConfirmYes} disabled={!editValues.contactId}>
+                  ✅ Confirm
+                </button>
+                <button className="vf-btn-skip" onClick={handleSkipStep}>⏭ Skip</button>
+              </div>
+            </div>
+          ) : editMode ? (
+            /* ── Regular edit modes ── */
             step === 'assignee' ? (
               <div className="vf-edit-area">
                 <div className="vf-user-checklist">
@@ -581,7 +774,8 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
           )}
         </div>
 
-        {!editMode && (
+        {/* Regular confirm buttons — not shown for account/contact (they have inline buttons) */}
+        {!editMode && step !== 'account' && step !== 'contact' && (
           <div className="vf-confirm-actions">
             <div className="vf-confirm-question">Is this correct?</div>
             <div className="vf-confirm-btns">
@@ -631,6 +825,18 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
             <div className="vf-preview-row">
               <span className="vf-preview-key">🗓 Due Date</span>
               <span className="vf-preview-val">{editValues.dateEndDate}</span>
+            </div>
+          )}
+          {editValues.accountName && (
+            <div className="vf-preview-row">
+              <span className="vf-preview-key">🏢 Account</span>
+              <span className="vf-preview-val">{editValues.accountName}</span>
+            </div>
+          )}
+          {editValues.contactName && (
+            <div className="vf-preview-row">
+              <span className="vf-preview-key">👤 Contact</span>
+              <span className="vf-preview-val">{editValues.contactName}</span>
             </div>
           )}
           {editValues.description && (

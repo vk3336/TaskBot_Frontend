@@ -2233,3 +2233,122 @@ body {
   .pagination-row { flex-direction: column; align-items: flex-start; gap: 8px; }
   .show-more-btn, .show-less-btn { width: 100%; text-align: center; justify-content: center; }
 }
+
+/* ══════════════════════════════════════════
+   VOICE FLOW — ACCOUNT / CONTACT STEPS
+══════════════════════════════════════════ */
+
+/* "Optional" badge in confirm header */
+.vf-optional-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 3px 10px;
+}
+
+/* Search input + dropdown wrapper */
+.vf-dropdown {
+  margin-top: 4px;
+  background: rgba(13,13,22,0.97);
+  border: 1px solid rgba(99,102,241,0.25);
+  border-radius: 12px;
+  overflow: hidden;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.5);
+}
+
+.vf-dropdown-item {
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-weight: 500;
+}
+
+.vf-dropdown-item:last-child { border-bottom: none; }
+
+.vf-dropdown-item:hover {
+  background: rgba(99,102,241,0.15);
+  color: var(--text-primary);
+}
+
+/* Selected account/contact badge */
+.vf-selected-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(99,102,241,0.12);
+  border: 1px solid rgba(99,102,241,0.3);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--indigo-light);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.vf-clear-btn {
+  margin-left: auto;
+  background: rgba(244,63,94,0.12);
+  border: 1px solid rgba(244,63,94,0.25);
+  color: #fb7185;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  transition: all 0.13s ease;
+}
+
+.vf-clear-btn:hover {
+  background: rgba(244,63,94,0.25);
+  border-color: rgba(244,63,94,0.5);
+}
+
+/* Row of action buttons (Confirm + Skip) */
+.vf-action-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* Skip button */
+.vf-btn-skip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  letter-spacing: -0.1px;
+}
+
+.vf-btn-skip:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: var(--border-bright);
+  color: var(--text-secondary);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 600px) {
+  .vf-action-row { flex-direction: column; }
+  .vf-btn-skip { width: 100%; justify-content: center; }
+}
