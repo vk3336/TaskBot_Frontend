@@ -4,7 +4,7 @@ A conversational, chat-style Progressive Web App (PWA) for managing tasks in **E
 
 ---
 
-## Table of Contents
+## Tables
 
 - [Overview](#overview)
 - [Tech Stack](#tech-stack)
