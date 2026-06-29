@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import VoiceTaskFlow from './VoiceTaskFlow.jsx'
 
 const API          = import.meta.env.VITE_BACKEND
@@ -322,6 +323,70 @@ function UserList({ users, onSelect }) {
   )
 }
 
+/* ── SearchDropdown — portal-based floating dropdown, never clipped ─────────
+   Renders the dropdown via React Portal into document.body so it sits on top
+   of any overflow:hidden parent. Position is calculated from the input's
+   getBoundingClientRect so it always aligns under the trigger element.
+──────────────────────────────────────────────────────────────────────────── */
+function SearchDropdown({ triggerRef, open, items, hint, emptyText, onSelect, createText, onCreate }) {
+  const [rect, setRect] = useState(null)
+
+  useEffect(() => {
+    if (!open || !triggerRef.current) return
+    const update = () => {
+      const r = triggerRef.current?.getBoundingClientRect()
+      if (r) setRect(r)
+    }
+    update()
+    window.addEventListener('scroll', update, true)
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+    }
+  }, [open, triggerRef])
+
+  if (!open || !rect) return null
+
+  // Flip upward if not enough space below
+  const spaceBelow = window.innerHeight - rect.bottom
+  const dropHeight = Math.min(items.length * 44 + 60, 280)
+  const showAbove  = spaceBelow < dropHeight + 8 && rect.top > dropHeight
+
+  const style = {
+    position: 'fixed',
+    left:  rect.left,
+    width: rect.width,
+    zIndex: 9999,
+    ...(showAbove
+      ? { bottom: window.innerHeight - rect.top + 4 }
+      : { top: rect.bottom + 4 }),
+  }
+
+  return createPortal(
+    <div className="sdd-dropdown" style={style}>
+      {hint && <div className="sdd-hint">{hint}</div>}
+      {items.length > 0 ? items.map(item => (
+        <div key={item.id} className="sdd-item" onMouseDown={e => { e.preventDefault(); onSelect(item) }}>
+          <span className="sdd-icon">{item.icon || '•'}</span>
+          <div className="sdd-info">
+            <span className="sdd-name">{item.name}</span>
+            {item.sub && <span className="sdd-sub">{item.sub}</span>}
+          </div>
+        </div>
+      )) : (
+        <div className="sdd-empty">{emptyText || 'No results'}</div>
+      )}
+      {createText && (
+        <div className="sdd-create" onMouseDown={e => { e.preventDefault(); onCreate() }}>
+          ➕ {createText}
+        </div>
+      )}
+    </div>,
+    document.body
+  )
+}
+
 function CreateTaskForm({ onSubmit, onCancel }) {
   const [form, setForm] = useState({
     name: '', description: '', priority: 'Normal',
@@ -443,14 +508,35 @@ function CreateTaskForm({ onSubmit, onCancel }) {
     finally { setLoading(false) }
   }
 
-  // Compute dropdown results
+  // Compute dropdown results — always show 5 defaults, filter when typing
   const filteredContacts = form.accountId
     ? contacts.filter(c => c.accountId === form.accountId)
     : contacts
-  const accResults = accountSearch.trim() ? fuzzyMatch(accountSearch, accounts).slice(0, 8) : accounts.slice(0, 8)
-  const conResults = contactSearch.trim() ? fuzzyMatch(contactSearch, filteredContacts).slice(0, 8) : filteredContacts.slice(0, 8)
-  const accExact   = accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase())
-  const conExact   = contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
+  const accResults = (accountSearch.trim()
+    ? fuzzyMatch(accountSearch, accounts)
+    : accounts).slice(0, 5)
+  const conResults = (contactSearch.trim()
+    ? fuzzyMatch(contactSearch, filteredContacts)
+    : filteredContacts).slice(0, 5)
+  const accExact = accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase())
+  const conExact = contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
+
+  // Dropdown open state — controlled by focus/blur
+  const [accOpen, setAccOpen] = useState(false)
+  const [conOpen, setConOpen] = useState(false)
+  // Refs point to the input elements (used by SearchDropdown for positioning)
+  const accInputRef = useRef(null)
+  const conInputRef = useRef(null)
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (accInputRef.current && !accInputRef.current.contains(e.target)) setAccOpen(false)
+      if (conInputRef.current && !conInputRef.current.contains(e.target)) setConOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   const assignedNames = Object.values(form.assignedUsersNames)
   return (
@@ -483,7 +569,8 @@ function CreateTaskForm({ onSubmit, onCancel }) {
         <label>🏢 Account (Company)</label>
         {form.accountId ? (
           <div className="cf-selected-row">
-            <span>🏢 <strong>{form.accountName}</strong></span>
+            <span className="cf-selected-icon">🏢</span>
+            <span className="cf-selected-name">{form.accountName}</span>
             <button type="button" className="cf-clear-btn" onClick={() => {
               setForm(prev => ({ ...prev, accountId: '', accountName: '', contactId: '', contactName: '' }))
               setAccountSearch(''); setContactSearch('')
@@ -491,24 +578,26 @@ function CreateTaskForm({ onSubmit, onCancel }) {
           </div>
         ) : (
           <div className="cf-search-wrap">
-            <input className="form-input" placeholder="Search or type company name…"
+            <input
+              ref={accInputRef}
+              className="cf-input form-input"
+              placeholder="Search company name…"
               value={accountSearch}
-              onChange={e => { setAccountSearch(e.target.value); setAccError('') }} />
-            {accountSearch.trim() && accResults.length > 0 && (
-              <div className="cf-dropdown">
-                {accResults.map(a => (
-                  <div key={a.id} className="cf-dropdown-item" onClick={() => selectAccount(a)}>
-                    🏢 {a.name}
-                  </div>
-                ))}
-              </div>
-            )}
-            {accountSearch.trim().length > 1 && !accExact && (
-              <button type="button" className="cf-create-btn" onClick={handleCreateAccount} disabled={creatingAcc}>
-                {creatingAcc ? '⏳ Creating…' : `➕ Create "${accountSearch.trim()}"`}
-              </button>
-            )}
-            {accError && <div className="form-error" style={{ marginTop: 4 }}>⚠️ {accError}</div>}
+              onFocus={() => setAccOpen(true)}
+              onChange={e => { setAccountSearch(e.target.value); setAccError(''); setAccOpen(true) }}
+              autoComplete="off"
+            />
+            <SearchDropdown
+              triggerRef={accInputRef}
+              open={accOpen}
+              hint={accountSearch.trim() ? 'Matching accounts' : 'Recent accounts'}
+              items={accResults.map(a => ({ id: a.id, name: a.name, icon: '🏢' }))}
+              emptyText="No accounts found"
+              onSelect={a => { selectAccount({ id: a.id, name: a.name }); setAccOpen(false) }}
+              createText={accountSearch.trim().length > 1 && !accExact ? (creatingAcc ? 'Creating…' : `"${accountSearch.trim()}"`) : null}
+              onCreate={() => { handleCreateAccount(); setAccOpen(false) }}
+            />
+            {accError && <div className="cf-field-error">⚠️ {accError}</div>}
           </div>
         )}
       </div>
@@ -518,15 +607,16 @@ function CreateTaskForm({ onSubmit, onCancel }) {
         <label>
           👤 Contact (Person)
           {form.accountId && !form.contactId && (
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 6 }}>
-              showing contacts in {form.accountName}
-            </span>
+            <span className="cf-label-hint">in {form.accountName}</span>
           )}
         </label>
         {form.contactId ? (
           <div className="cf-selected-row">
-            <span>👤 <strong>{form.contactName}</strong></span>
-            {form.accountName && <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 6 }}>🏢 {form.accountName}</span>}
+            <span className="cf-selected-icon">👤</span>
+            <div className="cf-selected-info">
+              <span className="cf-selected-name">{form.contactName}</span>
+              {form.accountName && <span className="cf-selected-sub">🏢 {form.accountName}</span>}
+            </div>
             <button type="button" className="cf-clear-btn" onClick={() => {
               setForm(prev => ({ ...prev, contactId: '', contactName: '' }))
               setContactSearch('')
@@ -534,30 +624,31 @@ function CreateTaskForm({ onSubmit, onCancel }) {
           </div>
         ) : (
           <div className="cf-search-wrap">
-            <input className="form-input"
-              placeholder={form.accountId ? `Search contacts in ${form.accountName}…` : 'Search or type contact name…'}
+            <input
+              ref={conInputRef}
+              className="cf-input form-input"
+              placeholder={form.accountId ? `Search in ${form.accountName}…` : 'Search contact name…'}
               value={contactSearch}
-              onChange={e => { setContactSearch(e.target.value); setConError('') }} />
-            {contactSearch.trim() && conResults.length > 0 && (
-              <div className="cf-dropdown">
-                {conResults.map(c => (
-                  <div key={c.id} className="cf-dropdown-item" onClick={() => selectContact(c)}>
-                    <span>👤 {c.name}</span>
-                    {c.accountName && <span className="cf-dropdown-sub">🏢 {c.accountName}</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-            {contactSearch.trim().length > 1 && !conExact && (
-              <button type="button" className="cf-create-btn" onClick={handleCreateContact} disabled={creatingCon}>
-                {creatingCon
-                  ? '⏳ Creating…'
-                  : form.accountId
-                    ? `➕ Create "${contactSearch.trim()}" under ${form.accountName}`
-                    : `➕ Create "${contactSearch.trim()}"`}
-              </button>
-            )}
-            {conError && <div className="form-error" style={{ marginTop: 4 }}>⚠️ {conError}</div>}
+              onFocus={() => setConOpen(true)}
+              onChange={e => { setContactSearch(e.target.value); setConError(''); setConOpen(true) }}
+              autoComplete="off"
+            />
+            <SearchDropdown
+              triggerRef={conInputRef}
+              open={conOpen}
+              hint={contactSearch.trim() ? 'Matching contacts' : (form.accountId ? `Contacts in ${form.accountName}` : 'Recent contacts')}
+              items={conResults.map(c => ({ id: c.id, name: c.name, icon: '👤', sub: c.accountName ? `🏢 ${c.accountName}` : null }))}
+              emptyText={form.accountId ? `No contacts in ${form.accountName}` : 'No contacts found'}
+              onSelect={c => {
+                const full = contacts.find(x => x.id === c.id) || c
+                selectContact(full); setConOpen(false)
+              }}
+              createText={contactSearch.trim().length > 1 && !conExact
+                ? (creatingCon ? 'Creating…' : `"${contactSearch.trim()}"${form.accountId ? ` under ${form.accountName}` : ''}`)
+                : null}
+              onCreate={() => { handleCreateContact(); setConOpen(false) }}
+            />
+            {conError && <div className="cf-field-error">⚠️ {conError}</div>}
           </div>
         )}
       </div>

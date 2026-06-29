@@ -395,17 +395,17 @@ function useRecorder(onError) {
 function AccountStep({ editValues, setEditValues, accounts, setAccounts, contacts, accountSearch, setAccountSearch, setContactSearch, onConfirm, onSkip }) {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
+  const [open, setOpen] = useState(true) // open by default when step is shown
+  const wrapRef = useRef(null)
 
-  // If a contact is already linked, derive the account from it
   const lockedByContact = !!(editValues.contactId && editValues.accountId)
-
-  // Candidates = AI found 2+ matches → show as a choice list first
   const candidates = editValues.accountCandidates || []
   const inCandidateMode = candidates.length > 1 && !editValues.accountId
 
+  // Always show 5 defaults; filter when typing
   const results = accountSearch.trim()
-    ? fuzzyMatch(accountSearch, accounts).slice(0, 10)
-    : accounts.slice(0, 10)
+    ? fuzzyMatch(accountSearch, accounts).slice(0, 6)
+    : accounts.slice(0, 5)
 
   const exactExists = accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase())
   const showCreate  = accountSearch.trim().length > 1 && !exactExists && !editValues.accountId && !inCandidateMode
@@ -413,42 +413,46 @@ function AccountStep({ editValues, setEditValues, accounts, setAccounts, contact
   const selectAccount = (a) => {
     setEditValues(v => ({ ...v, accountId: a.id, accountName: a.name, accountCandidates: [] }))
     setAccountSearch(a.name)
+    setOpen(false)
   }
 
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
   const handleCreate = async () => {
-    setCreating(true)
-    setCreateError('')
+    setCreating(true); setCreateError('')
     try {
       const newAcc = await apiCreateAccount(accountSearch.trim())
       setAccounts(prev => [...prev, newAcc])
       selectAccount(newAcc)
-    } catch (e) {
-      setCreateError(e.message)
-    } finally {
-      setCreating(false)
-    }
+    } catch (e) { setCreateError(e.message) }
+    finally { setCreating(false) }
   }
 
   return (
     <div className="vf-edit-area">
       {lockedByContact && (
-        <div className="vf-info-note">
-          🔗 Auto-filled from selected contact — <strong>{editValues.contactName}</strong>
-        </div>
+        <div className="vf-info-note">🔗 Auto-filled from contact — <strong>{editValues.contactName}</strong></div>
       )}
 
       {editValues.accountId ? (
         <div className="vf-selected-badge">
-          🏢 <strong>{editValues.accountName}</strong>
+          <span>🏢</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700 }}>{editValues.accountName}</div>
+          </div>
           {!lockedByContact && (
             <button className="vf-clear-btn" onClick={() => {
               setEditValues(v => ({ ...v, accountId: '', accountName: '' }))
-              setAccountSearch('')
+              setAccountSearch(''); setOpen(true)
             }}>✕</button>
           )}
         </div>
       ) : inCandidateMode ? (
-        /* ── Multiple matches found by AI — show choice list ── */
         <>
           <div className="vf-candidates-label">
             🤔 Multiple accounts match <strong>"{editValues.mentionedAccountName}"</strong> — pick one:
@@ -465,36 +469,51 @@ function AccountStep({ editValues, setEditValues, accounts, setAccounts, contact
           }>🔍 Search instead</button>
         </>
       ) : (
-        <>
-          <input
-            className="vf-input"
-            placeholder="Search or type company name…"
-            value={accountSearch}
-            onChange={e => { setAccountSearch(e.target.value); setCreateError('') }}
-            autoFocus
-          />
-          {results.length > 0 && (
-            <div className="vf-dropdown">
-              {results.map(a => (
-                <div key={a.id} className="vf-dropdown-item" onClick={() => selectAccount(a)}>
-                  🏢 {a.name}
+        <div className="vf-cf-wrap" ref={wrapRef}>
+          <div className="vf-cf-input-row">
+            <input
+              className="vf-input"
+              placeholder="Search company name…"
+              value={accountSearch}
+              onFocus={() => setOpen(true)}
+              onChange={e => { setAccountSearch(e.target.value); setCreateError(''); setOpen(true) }}
+            />
+            {accountSearch && (
+              <button className="vf-cf-input-clear" type="button"
+                onClick={() => { setAccountSearch(''); setCreateError('') }}>✕</button>
+            )}
+          </div>
+          {open && (
+            <div className="vf-cf-dropdown">
+              {results.length > 0 ? (
+                <>
+                  <div className="vf-cf-dropdown-hint">
+                    {accountSearch.trim() ? 'Matching accounts' : 'Accounts — tap to select'}
+                  </div>
+                  {results.map(a => (
+                    <div key={a.id} className="vf-cf-dropdown-item"
+                      onMouseDown={() => selectAccount(a)}>
+                      <span className="vf-cf-item-icon">🏢</span>
+                      <span className="vf-cf-item-name">{a.name}</span>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="vf-cf-dropdown-empty">No accounts found</div>
+              )}
+              {showCreate && (
+                <div className="vf-cf-dropdown-create" onMouseDown={handleCreate}>
+                  {creating ? '⏳ Creating…' : <><span>➕</span> Create <strong>"{accountSearch.trim()}"</strong></>}
                 </div>
-              ))}
+              )}
             </div>
           )}
-          {showCreate && (
-            <button className="vf-create-new-btn" onClick={handleCreate} disabled={creating}>
-              {creating ? '⏳ Creating…' : `➕ Create "${accountSearch.trim()}" as new account`}
-            </button>
-          )}
           {createError && <div className="vf-error" style={{ marginTop: 6 }}>⚠️ {createError}</div>}
-        </>
+        </div>
       )}
 
       <div className="vf-action-row">
-        <button className="vf-btn-yes" onClick={onConfirm} disabled={!editValues.accountId}>
-          ✅ Confirm
-        </button>
+        <button className="vf-btn-yes" onClick={onConfirm} disabled={!editValues.accountId}>✅ Confirm</button>
         <button className="vf-btn-skip" onClick={onSkip}>⏭ Skip</button>
       </div>
     </div>
@@ -505,19 +524,20 @@ function AccountStep({ editValues, setEditValues, accounts, setAccounts, contact
 function ContactStep({ editValues, setEditValues, contacts, setContacts, accounts, contactSearch, setContactSearch, setAccountSearch, onConfirm, onSkip }) {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
+  const [open, setOpen] = useState(true)
+  const wrapRef = useRef(null)
 
-  // Candidates = AI found 2+ matches → show as a choice list first
   const candidates = editValues.contactCandidates || []
   const inCandidateMode = candidates.length > 1 && !editValues.contactId
 
-  // If account is already selected, filter contacts to that account first
   const filteredContacts = editValues.accountId
     ? contacts.filter(c => c.accountId === editValues.accountId)
     : contacts
 
+  // Always show 5 defaults; filter when typing
   const results = contactSearch.trim()
-    ? fuzzyMatch(contactSearch, filteredContacts).slice(0, 10)
-    : filteredContacts.slice(0, 10)
+    ? fuzzyMatch(contactSearch, filteredContacts).slice(0, 6)
+    : filteredContacts.slice(0, 5)
 
   const exactExists = contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
   const showCreate  = contactSearch.trim().length > 1 && !exactExists && !editValues.contactId && !inCandidateMode
@@ -525,7 +545,6 @@ function ContactStep({ editValues, setEditValues, contacts, setContacts, account
   const selectContact = (c) => {
     setEditValues(v => {
       const updated = { ...v, contactId: c.id, contactName: c.name, contactCandidates: [] }
-      // Auto-fill account from this contact if not already set
       if (c.accountId && !v.accountId) {
         updated.accountId   = c.accountId
         updated.accountName = c.accountName || ''
@@ -534,48 +553,54 @@ function ContactStep({ editValues, setEditValues, contacts, setContacts, account
       return updated
     })
     setContactSearch(c.name)
+    setOpen(false)
   }
 
+  useEffect(() => {
+    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
   const handleCreate = async () => {
-    setCreating(true)
-    setCreateError('')
+    setCreating(true); setCreateError('')
     try {
       const newContact = await apiCreateContact(contactSearch.trim(), editValues.accountId || undefined)
       setContacts(prev => [...prev, newContact])
       selectContact(newContact)
-    } catch (e) {
-      setCreateError(e.message)
-    } finally {
-      setCreating(false)
-    }
+    } catch (e) { setCreateError(e.message) }
+    finally { setCreating(false) }
   }
 
   return (
     <div className="vf-edit-area">
       {editValues.accountId && !inCandidateMode && (
         <div className="vf-info-note">
-          🔍 Showing contacts for <strong>{editValues.accountName}</strong>
-          {filteredContacts.length === 0 && ' — no contacts yet'}
+          🔍 Contacts in <strong>{editValues.accountName}</strong>
+          {filteredContacts.length === 0 && ' — none yet'}
         </div>
       )}
 
       {editValues.contactId ? (
         <>
           <div className="vf-selected-badge">
-            👤 <strong>{editValues.contactName}</strong>
+            <span>👤</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700 }}>{editValues.contactName}</div>
+              {editValues.accountName && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 2 }}>🏢 {editValues.accountName}</div>
+              )}
+            </div>
             <button className="vf-clear-btn" onClick={() => {
               setEditValues(v => ({ ...v, contactId: '', contactName: '' }))
-              setContactSearch('')
+              setContactSearch(''); setOpen(true)
             }}>✕</button>
           </div>
           {editValues.accountId && (
-            <div className="vf-auto-filled">
-              🏢 Account auto-filled: <strong>{editValues.accountName}</strong>
-            </div>
+            <div className="vf-auto-filled">🏢 Account linked: <strong>{editValues.accountName}</strong></div>
           )}
         </>
       ) : inCandidateMode ? (
-        /* ── Multiple matches found by AI — show choice list ── */
         <>
           <div className="vf-candidates-label">
             🤔 Multiple contacts match <strong>"{editValues.mentionedContactName}"</strong> — pick one:
@@ -593,41 +618,63 @@ function ContactStep({ editValues, setEditValues, contacts, setContacts, account
           }>🔍 Search instead</button>
         </>
       ) : (
-        <>
-          <input
-            className="vf-input"
-            placeholder={editValues.accountId ? `Search contacts in ${editValues.accountName}…` : 'Search or type contact name…'}
-            value={contactSearch}
-            onChange={e => { setContactSearch(e.target.value); setCreateError('') }}
-            autoFocus
-          />
-          {results.length > 0 && (
-            <div className="vf-dropdown">
-              {results.map(c => (
-                <div key={c.id} className="vf-dropdown-item" onClick={() => selectContact(c)}>
-                  <span>👤 {c.name}</span>
-                  {c.accountName && <span className="vf-dropdown-sub">🏢 {c.accountName}</span>}
+        <div className="vf-cf-wrap" ref={wrapRef}>
+          <div className="vf-cf-input-row">
+            <input
+              className="vf-input"
+              placeholder={editValues.accountId ? `Search in ${editValues.accountName}…` : 'Search contact name…'}
+              value={contactSearch}
+              onFocus={() => setOpen(true)}
+              onChange={e => { setContactSearch(e.target.value); setCreateError(''); setOpen(true) }}
+            />
+            {contactSearch && (
+              <button className="vf-cf-input-clear" type="button"
+                onClick={() => { setContactSearch(''); setCreateError('') }}>✕</button>
+            )}
+          </div>
+          {open && (
+            <div className="vf-cf-dropdown">
+              {results.length > 0 ? (
+                <>
+                  <div className="vf-cf-dropdown-hint">
+                    {contactSearch.trim()
+                      ? 'Matching contacts'
+                      : editValues.accountId ? `Contacts in ${editValues.accountName}` : 'Contacts — tap to select'}
+                  </div>
+                  {results.map(c => (
+                    <div key={c.id} className="vf-cf-dropdown-item"
+                      onMouseDown={() => selectContact(c)}>
+                      <span className="vf-cf-item-icon">👤</span>
+                      <div className="vf-cf-item-info">
+                        <span className="vf-cf-item-name">{c.name}</span>
+                        {c.accountName && <span className="vf-cf-item-sub">🏢 {c.accountName}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="vf-cf-dropdown-empty">
+                  {editValues.accountId ? `No contacts in ${editValues.accountName}` : 'No contacts found'}
                 </div>
-              ))}
+              )}
+              {showCreate && (
+                <div className="vf-cf-dropdown-create" onMouseDown={handleCreate}>
+                  {creating ? '⏳ Creating…' : (
+                    <>
+                      <span>➕</span> Create <strong>"{contactSearch.trim()}"</strong>
+                      {editValues.accountId && <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}> under {editValues.accountName}</span>}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
-          {showCreate && (
-            <button className="vf-create-new-btn" onClick={handleCreate} disabled={creating}>
-              {creating
-                ? '⏳ Creating…'
-                : editValues.accountId
-                  ? `➕ Create "${contactSearch.trim()}" under ${editValues.accountName}`
-                  : `➕ Create "${contactSearch.trim()}" as new contact`}
-            </button>
-          )}
           {createError && <div className="vf-error" style={{ marginTop: 6 }}>⚠️ {createError}</div>}
-        </>
+        </div>
       )}
 
       <div className="vf-action-row">
-        <button className="vf-btn-yes" onClick={onConfirm} disabled={!editValues.contactId}>
-          ✅ Confirm
-        </button>
+        <button className="vf-btn-yes" onClick={onConfirm} disabled={!editValues.contactId}>✅ Confirm</button>
         <button className="vf-btn-skip" onClick={onSkip}>⏭ Skip</button>
       </div>
     </div>
