@@ -2,10 +2,12 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import VoiceTaskFlow from './VoiceTaskFlow.jsx'
 
-const API          = import.meta.env.VITE_BACKEND
-const USERS_API    = import.meta.env.VITE_USERS_API
-const ACCOUNT_API  = import.meta.env.VITE_ACCOUNT_API
-const CONTACT_API  = import.meta.env.VITE_CONTACT_API
+const API                 = import.meta.env.VITE_BACKEND
+const USERS_API           = import.meta.env.VITE_USERS_API
+const ACCOUNT_API         = import.meta.env.VITE_ACCOUNT_API
+const CONTACT_API         = import.meta.env.VITE_CONTACT_API
+const ACCOUNT_SEARCH_API  = import.meta.env.VITE_ACCOUNT_SEARCH_API
+const CONTACT_SEARCH_API  = import.meta.env.VITE_CONTACT_SEARCH_API
 
 /* ── env guard — fail loudly at startup instead of silently at runtime ── */
 if (!API)       console.error('[TaskBot] VITE_BACKEND is not set. Task API calls will fail. Check your .env.local file.')
@@ -84,6 +86,25 @@ async function apiCreateContact(name, accountId) {
   return json.data
 }
 
+// ── Server-side Fuse.js search (more accurate than client-side fuzzyMatch) ────
+async function searchAccountsAPI(query, limit = 5) {
+  if (!ACCOUNT_SEARCH_API || !query?.trim()) return []
+  try {
+    const res = await fetch(`${ACCOUNT_SEARCH_API}?q=${encodeURIComponent(query.trim())}&limit=${limit}`)
+    if (!res.ok) return []
+    return (await res.json()).data || []
+  } catch { return [] }
+}
+
+async function searchContactsAPI(query, limit = 5) {
+  if (!CONTACT_SEARCH_API || !query?.trim()) return []
+  try {
+    const res = await fetch(`${CONTACT_SEARCH_API}?q=${encodeURIComponent(query.trim())}&limit=${limit}`)
+    if (!res.ok) return []
+    return (await res.json()).data || []
+  } catch { return [] }
+}
+
 /* ── Scored fuzzy match (same as VoiceTaskFlow) ── */
 function fuzzyMatch(query, list) {
   if (!query || !list?.length) return []
@@ -111,6 +132,35 @@ function getUniqueValues(tasks, field) {
   const set = new Set()
   tasks.forEach(t => { if (t[field]) set.add(t[field]) })
   return [...set].sort()
+}
+
+// Extract unique accounts from tasks — only those actually linked to a task
+function getUniqueAccounts(tasks) {
+  const map = new Map()
+  tasks.forEach(t => {
+    // Use accountId as key when available, else fall back to accountName as key
+    if (t.accountName) {
+      const key = t.accountId || `name:${t.accountName}`
+      if (!map.has(key)) map.set(key, { id: t.accountId || null, name: t.accountName })
+    }
+  })
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// Extract unique contacts from tasks — only those actually linked to a task
+function getUniqueContacts(tasks) {
+  const map = new Map()
+  tasks.forEach(t => {
+    if (t.contactId && t.contactName) {
+      map.set(t.contactId, {
+        id:          t.contactId,
+        name:        t.contactName,
+        accountId:   t.accountId   || null,
+        accountName: t.accountName || null,
+      })
+    }
+  })
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
 const PRIORITY_ORDER = { Urgent: 0, High: 1, Normal: 2, Low: 3 }
@@ -145,25 +195,70 @@ function applyFilters(tasks, filters) {
     if (filters.priority && t.priority !== filters.priority) return false
     if (filters.dateStartDate && (!t.dateStartDate || t.dateStartDate < filters.dateStartDate)) return false
     if (filters.dateEndDate && (!t.dateEndDate || t.dateEndDate > filters.dateEndDate)) return false
+    // Match account by ID when available, fall back to name comparison
+    if (filters.accountName) {
+      const matchById   = filters.accountId && t.accountId === filters.accountId
+      const matchByName = t.accountName === filters.accountName
+      if (!matchById && !matchByName) return false
+    }
+    if (filters.contactId && t.contactId !== filters.contactId) return false
     return true
   })
 }
 
-const EMPTY_FILTERS = { status: '', priority: '', dateStartDate: '', dateEndDate: '', userId: '' }
+const EMPTY_FILTERS = { status: '', priority: '', dateStartDate: '', dateEndDate: '', userId: '', accountId: '', accountName: '', contactId: '', contactName: '' }
 
 function hasActiveFilters(filters) {
-  return !!(filters.status || filters.priority || filters.dateStartDate || filters.dateEndDate || filters.userId)
+  return !!(filters.status || filters.priority || filters.dateStartDate || filters.dateEndDate || filters.userId || filters.accountId || filters.contactId)
 }
 
 function TaskFilterBar({ tasks, filters, onChange, showUserFilter = false }) {
-  const statuses  = getUniqueValues(tasks, 'status')
+  const statuses   = getUniqueValues(tasks, 'status')
   const priorities = sortPriorities(getUniqueValues(tasks, 'priority'))
   const startDates = getUniqueValues(tasks, 'dateStartDate')
   const endDates   = getUniqueValues(tasks, 'dateEndDate')
   const users      = showUserFilter ? getUniqueUsers(tasks) : []
 
-  const activeCount = Object.values(filters).filter(Boolean).length
-  const hasFilters  = activeCount > 0
+  // Build account/contact lists from tasks — only those that appear in this task set
+  const allAccounts = getUniqueAccounts(tasks)
+  const allContacts = getUniqueContacts(tasks)
+
+  // Local search state — filters within the task-derived lists only
+  const [accSearch, setAccSearch] = useState('')
+  const [conSearch, setConSearch] = useState('')
+  const [accOpen,   setAccOpen]   = useState(false)
+  const [conOpen,   setConOpen]   = useState(false)
+  const accInputRef = useRef(null)
+  const conInputRef = useRef(null)
+
+  // Filter the task-derived lists by what user typed
+  const accResults = accSearch.trim()
+    ? allAccounts.filter(a => a.name.toLowerCase().includes(accSearch.toLowerCase()))
+    : allAccounts
+
+  // When an account is already selected, only show its contacts
+  const contactsInScope = filters.accountName
+    ? allContacts.filter(c => c.accountName === filters.accountName)
+    : allContacts
+
+  const conResults = conSearch.trim()
+    ? contactsInScope.filter(c => c.name.toLowerCase().includes(conSearch.toLowerCase()))
+    : contactsInScope
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (accInputRef.current && !accInputRef.current.closest('.ff-search-wrap')?.contains(e.target)) setAccOpen(false)
+      if (conInputRef.current && !conInputRef.current.closest('.ff-search-wrap')?.contains(e.target)) setConOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const activeCount = Object.entries(filters).filter(([k, v]) =>
+    !['accountName', 'contactName'].includes(k) && v
+  ).length
+  const hasFilters = activeCount > 0
 
   const priorityColors = {
     Urgent: { bg: 'rgba(244,63,94,0.15)', border: 'rgba(244,63,94,0.4)', color: '#f87171' },
@@ -180,7 +275,10 @@ function TaskFilterBar({ tasks, filters, onChange, showUserFilter = false }) {
           {hasFilters && <span className="filter-active-badge">{activeCount}</span>}
         </span>
         {hasFilters && (
-          <button className="filter-clear-btn" onClick={() => onChange(EMPTY_FILTERS)}>
+          <button className="filter-clear-btn" onClick={() => {
+            onChange(EMPTY_FILTERS)
+            setAccSearch(''); setConSearch('')
+          }}>
             ✕ Clear all
           </button>
         )}
@@ -233,7 +331,7 @@ function TaskFilterBar({ tasks, filters, onChange, showUserFilter = false }) {
         {/* User — only shown on All Tasks view */}
         {showUserFilter && users.length > 0 && (
           <div className="filter-group filter-group-date">
-            <label className="filter-label">Task by User</label>
+            <label className="filter-label">By User</label>
             <select
               className="filter-select"
               value={filters.userId}
@@ -242,6 +340,119 @@ function TaskFilterBar({ tasks, filters, onChange, showUserFilter = false }) {
               <option value="">Any</option>
               {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
+          </div>
+        )}
+
+        {/* Account filter — only accounts that appear in tasks */}
+        {allAccounts.length > 0 && (
+          <div className="filter-group filter-group-search">
+            <label className="filter-label">🏢 Account</label>
+            {filters.accountName ? (
+              <div className="ff-selected">
+                <span className="ff-selected-name">🏢 {filters.accountName}</span>
+                <button className="ff-selected-clear" onClick={() => {
+                  onChange({ ...filters, accountId: '', accountName: '', contactId: '', contactName: '' })
+                  setAccSearch(''); setConSearch('')
+                }}>✕</button>
+              </div>
+            ) : (
+              <div className="ff-search-wrap">
+                <input
+                  ref={accInputRef}
+                  className="ff-input filter-select"
+                  placeholder={`Search ${allAccounts.length} account${allAccounts.length !== 1 ? 's' : ''}…`}
+                  value={accSearch}
+                  onFocus={() => setAccOpen(true)}
+                  onChange={e => { setAccSearch(e.target.value); setAccOpen(true) }}
+                  autoComplete="off"
+                />
+                {accSearch && (
+                  <button className="ff-clear" onClick={() => { setAccSearch(''); setAccOpen(false) }}>✕</button>
+                )}
+                <SearchDropdown
+                  triggerRef={accInputRef}
+                  open={accOpen}
+                  hint={accSearch.trim() ? `${accResults.length} match${accResults.length !== 1 ? 'es' : ''}` : `${allAccounts.length} accounts in tasks`}
+                  items={accResults.map(a => ({ id: a.id, name: a.name, icon: '🏢' }))}
+                  emptyText="No matching accounts"
+                  onSelect={a => {
+                    // Auto-fill contact if exactly one contact in tasks belongs to this account
+                    const linked = allContacts.filter(c => c.accountName === a.name)
+                    const autoContact = linked.length === 1 ? linked[0] : null
+                    onChange({
+                      ...filters,
+                      accountId:   a.id,
+                      accountName: a.name,
+                      contactId:   autoContact ? autoContact.id   : filters.contactId,
+                      contactName: autoContact ? autoContact.name : filters.contactName,
+                    })
+                    setAccSearch(a.name)
+                    if (autoContact) setConSearch(autoContact.name)
+                    setAccOpen(false)
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Contact filter — only contacts that appear in tasks */}
+        {allContacts.length > 0 && (
+          <div className="filter-group filter-group-search">
+            <label className="filter-label">👤 Contact</label>
+            {filters.contactName ? (
+              <div className="ff-selected">
+                <span className="ff-selected-name">👤 {filters.contactName}</span>
+                <button className="ff-selected-clear" onClick={() => {
+                  onChange({ ...filters, contactId: '', contactName: '', accountId: '', accountName: '' })
+                  setConSearch(''); setAccSearch('')
+                }}>✕</button>
+              </div>
+            ) : (
+              <div className="ff-search-wrap">
+                <input
+                  ref={conInputRef}
+                  className="ff-input filter-select"
+                  placeholder={filters.accountName
+                    ? `Search ${contactsInScope.length} contact${contactsInScope.length !== 1 ? 's' : ''} in ${filters.accountName}…`
+                    : `Search ${allContacts.length} contact${allContacts.length !== 1 ? 's' : ''}…`
+                  }
+                  value={conSearch}
+                  onFocus={() => setConOpen(true)}
+                  onChange={e => { setConSearch(e.target.value); setConOpen(true) }}
+                  autoComplete="off"
+                />
+                {conSearch && (
+                  <button className="ff-clear" onClick={() => { setConSearch(''); setConOpen(false) }}>✕</button>
+                )}
+                <SearchDropdown
+                  triggerRef={conInputRef}
+                  open={conOpen}
+                  hint={conSearch.trim()
+                    ? `${conResults.length} match${conResults.length !== 1 ? 'es' : ''}`
+                    : filters.accountId
+                      ? `${contactsInScope.length} contacts in ${filters.accountName}`
+                      : `${allContacts.length} contacts in tasks`
+                  }
+                  items={conResults.map(c => ({ id: c.id, name: c.name, icon: '👤', sub: c.accountName ? `🏢 ${c.accountName}` : null, accountId: c.accountId || '', accountName: c.accountName || '' }))}
+                  emptyText="No matching contacts"
+                  onSelect={c => {
+                    // c carries accountId (may be null) + accountName from the task record
+                    // Always set accountName — filter matches by name when accountId is null
+                    onChange({
+                      ...filters,
+                      contactId:   c.id,
+                      contactName: c.name,
+                      accountId:   c.accountId   || '',
+                      accountName: c.accountName || filters.accountName,
+                    })
+                    setConSearch(c.name)
+                    if (c.accountName) setAccSearch(c.accountName)
+                    setConOpen(false)
+                  }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -297,6 +508,12 @@ function TaskCard({ task }) {
         {task.dateEnd && !task.dateEndDate && <span>📅 {task.dateEnd}</span>}
         {task.priority && <span>🔥 {task.priority}</span>}
       </div>
+      {(task.accountName || task.contactName) && (
+        <div className="task-meta task-meta-crm">
+          {task.accountName && <span className="task-crm-tag task-crm-account">🏢 {task.accountName}</span>}
+          {task.contactName && <span className="task-crm-tag task-crm-contact">👤 {task.contactName}</span>}
+        </div>
+      )}
       {task.description && <div className="task-desc">📝 {task.description}</div>}
       {(task.attachmentsIds?.length > 0) && (
         <div className="task-meta" style={{ marginTop: '4px' }}>
@@ -408,15 +625,64 @@ function CreateTaskForm({ onSubmit, onCancel }) {
   const [creatingCon,   setCreatingCon]   = useState(false)
   const [accError,      setAccError]      = useState('')
   const [conError,      setConError]      = useState('')
+  // API search results
+  const [accResults,    setAccResults]    = useState([])
+  const [conResults,    setConResults]    = useState([])
+  const [accSearching,  setAccSearching]  = useState(false)
+  const [conSearching,  setConSearching]  = useState(false)
+  const accDebounce = useRef(null)
+  const conDebounce = useRef(null)
 
   useEffect(() => {
     fetchUsers()
       .then(d => setUsers(d))
       .catch(err => { setError(`Failed to load users: ${err.message}`); setUsers([]) })
       .finally(() => setUsersLoading(false))
-    fetchAccounts().then(setAccounts).catch(() => {})
-    fetchContacts().then(setContacts).catch(() => {})
+    fetchAccounts().then(d => { setAccounts(d); setAccResults(d.slice(0, 5)) }).catch(() => {})
+    fetchContacts().then(d => { setContacts(d); setConResults(d.slice(0, 5)) }).catch(() => {})
   }, [])
+
+  // Debounced account search
+  useEffect(() => {
+    clearTimeout(accDebounce.current)
+    if (!accountSearch.trim()) {
+      setAccResults(accounts.slice(0, 5))
+      setAccSearching(false)
+      return
+    }
+    setAccSearching(true)
+    accDebounce.current = setTimeout(async () => {
+      const results = await searchAccountsAPI(accountSearch, 6)
+      setAccResults(results.length > 0 ? results : fuzzyMatch(accountSearch, accounts).slice(0, 6))
+      setAccSearching(false)
+    }, 300)
+    return () => clearTimeout(accDebounce.current)
+  }, [accountSearch, accounts])
+
+  // Debounced contact search
+  useEffect(() => {
+    clearTimeout(conDebounce.current)
+    const filteredContacts = form.accountId
+      ? contacts.filter(c => c.accountId === form.accountId)
+      : contacts
+    if (!contactSearch.trim()) {
+      setConResults(filteredContacts.slice(0, 5))
+      setConSearching(false)
+      return
+    }
+    setConSearching(true)
+    conDebounce.current = setTimeout(async () => {
+      const results = await searchContactsAPI(contactSearch, 6)
+      const filtered = form.accountId
+        ? results.filter(c => c.accountId === form.accountId)
+        : results
+      setConResults(
+        filtered.length > 0 ? filtered : fuzzyMatch(contactSearch, filteredContacts).slice(0, 6)
+      )
+      setConSearching(false)
+    }, 300)
+    return () => clearTimeout(conDebounce.current)
+  }, [contactSearch, contacts, form.accountId])
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
 
@@ -508,19 +774,6 @@ function CreateTaskForm({ onSubmit, onCancel }) {
     finally { setLoading(false) }
   }
 
-  // Compute dropdown results — always show 5 defaults, filter when typing
-  const filteredContacts = form.accountId
-    ? contacts.filter(c => c.accountId === form.accountId)
-    : contacts
-  const accResults = (accountSearch.trim()
-    ? fuzzyMatch(accountSearch, accounts)
-    : accounts).slice(0, 5)
-  const conResults = (contactSearch.trim()
-    ? fuzzyMatch(contactSearch, filteredContacts)
-    : filteredContacts).slice(0, 5)
-  const accExact = accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase())
-  const conExact = contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
-
   // Dropdown open state — controlled by focus/blur
   const [accOpen, setAccOpen] = useState(false)
   const [conOpen, setConOpen] = useState(false)
@@ -590,11 +843,11 @@ function CreateTaskForm({ onSubmit, onCancel }) {
             <SearchDropdown
               triggerRef={accInputRef}
               open={accOpen}
-              hint={accountSearch.trim() ? 'Matching accounts' : 'Recent accounts'}
+              hint={accountSearch.trim() ? (accSearching ? 'Searching…' : 'Matching accounts') : 'Recent accounts'}
               items={accResults.map(a => ({ id: a.id, name: a.name, icon: '🏢' }))}
-              emptyText="No accounts found"
+              emptyText={accSearching ? 'Searching…' : 'No accounts found'}
               onSelect={a => { selectAccount({ id: a.id, name: a.name }); setAccOpen(false) }}
-              createText={accountSearch.trim().length > 1 && !accExact ? (creatingAcc ? 'Creating…' : `"${accountSearch.trim()}"`) : null}
+              createText={accountSearch.trim().length > 1 && !accSearching && !accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase()) ? (creatingAcc ? 'Creating…' : `"${accountSearch.trim()}"`) : null}
               onCreate={() => { handleCreateAccount(); setAccOpen(false) }}
             />
             {accError && <div className="cf-field-error">⚠️ {accError}</div>}
@@ -636,14 +889,14 @@ function CreateTaskForm({ onSubmit, onCancel }) {
             <SearchDropdown
               triggerRef={conInputRef}
               open={conOpen}
-              hint={contactSearch.trim() ? 'Matching contacts' : (form.accountId ? `Contacts in ${form.accountName}` : 'Recent contacts')}
+              hint={contactSearch.trim() ? (conSearching ? 'Searching…' : 'Matching contacts') : (form.accountId ? `Contacts in ${form.accountName}` : 'Recent contacts')}
               items={conResults.map(c => ({ id: c.id, name: c.name, icon: '👤', sub: c.accountName ? `🏢 ${c.accountName}` : null }))}
-              emptyText={form.accountId ? `No contacts in ${form.accountName}` : 'No contacts found'}
+              emptyText={conSearching ? 'Searching…' : (form.accountId ? `No contacts in ${form.accountName}` : 'No contacts found')}
               onSelect={c => {
                 const full = contacts.find(x => x.id === c.id) || c
                 selectContact(full); setConOpen(false)
               }}
-              createText={contactSearch.trim().length > 1 && !conExact
+              createText={contactSearch.trim().length > 1 && !conSearching && !contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
                 ? (creatingCon ? 'Creating…' : `"${contactSearch.trim()}"${form.accountId ? ` under ${form.accountName}` : ''}`)
                 : null}
               onCreate={() => { handleCreateContact(); setConOpen(false) }}
@@ -778,14 +1031,14 @@ function TypingIndicator() {
 const NAV_ITEMS = [
   { icon: '📋', label: 'All Tasks',     desc: 'View every assigned task',         action: 'allTasks' },
   { icon: '➕', label: 'Create Task',   desc: 'Add a new task to EspoCRM',         action: 'createTask' },
-  { icon: '🎙', label: 'Voice Task',    desc: 'Record voice & AI extracts details', action: 'voiceTask' },
+  { icon: '🎤', label: 'Voice Task',    desc: 'Record voice & AI extracts details', action: 'voiceTask' },
   { icon: '👤', label: 'Tasks by User', desc: 'Filter tasks by team member',        action: 'tasksByUser' },
 ]
 
 const SUGGESTIONS = [
   { icon: '📋', title: 'View All Tasks',  desc: 'See every task with its assignee and status',                    action: 'allTasks' },
   { icon: '➕', title: 'Create a Task',   desc: 'Add a new task and assign it to a team member',                  action: 'createTask' },
-  { icon: '🎙', title: 'Voice Task',      desc: 'Record your voice or upload audio — AI extracts all task details', action: 'voiceTask' },
+  { icon: '🎤', title: 'Voice Task',      desc: 'Record your voice or upload audio — AI extracts all task details', action: 'voiceTask' },
   { icon: '👤', title: 'Tasks by User',   desc: 'Pick a team member and see all their tasks',                     action: 'tasksByUser' },
 ]
 
@@ -887,7 +1140,7 @@ export default function App() {
   }, [addMsg])
 
   const handleVoiceTask = useCallback(() => {
-    addMsg({ role: 'user', content: '🎙 Create task from voice' })
+    addMsg({ role: 'user', content: '🎤 Create task from voice' })
     addMsg({ role: 'ai', content: "Great! Record your voice note or upload an audio file. I'll extract all the task details and confirm each one with you before saving.", showVoice: true })
   }, [addMsg])
 
@@ -1010,7 +1263,7 @@ export default function App() {
     setIsTyping(true)
     setTimeout(() => {
       setIsTyping(false)
-      addMsg({ role: 'ai', content: "I can help you with:\n• 📋 View all tasks\n• ➕ Create a task\n• 🎙 Voice task (record or upload audio)\n• 👤 Tasks by user\n\nTap the menu icon or just ask!" })
+      addMsg({ role: 'ai', content: "I can help you with:\n• 📋 View all tasks\n• ➕ Create a task\n• 🎤 Voice task (record or upload audio)\n• 👤 Tasks by user\n\nTap the menu icon or just ask!" })
     }, 600)
   }, [input, addMsg, handleAllTasks, handleCreateTask, handleVoiceTask, handleTasksByUser])
 
@@ -1130,11 +1383,11 @@ export default function App() {
               rows={1}
             />
             <div className="input-actions">
-              <button className="voice-btn" title="Create task from voice" onClick={() => handleVoiceTask()}>🎙</button>
+              <button className="voice-btn" title="Create task from voice" onClick={() => handleVoiceTask()}>🎤</button>
               <button className="send-btn" onClick={() => handleSend()} disabled={!input.trim() || isTyping}>➤</button>
             </div>
           </div>
-          <div className="input-hint">Press Enter to send · Shift+Enter for new line · 🎙 for voice task</div>
+          <div className="input-hint">Press Enter to send · Shift+Enter for new line · 🎤 for voice task</div>
         </div>
       </main>
     </div>

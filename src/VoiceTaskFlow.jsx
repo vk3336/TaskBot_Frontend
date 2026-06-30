@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import lamejs from 'lamejs'
 
-const OPENAI_KEY   = import.meta.env.VITE_CHATGPT_KEY
-const USERS_API    = import.meta.env.VITE_USERS_API
-const ACCOUNT_API  = import.meta.env.VITE_ACCOUNT_API
-const CONTACT_API  = import.meta.env.VITE_CONTACT_API
+const OPENAI_KEY          = import.meta.env.VITE_CHATGPT_KEY
+const USERS_API           = import.meta.env.VITE_USERS_API
+const ACCOUNT_API         = import.meta.env.VITE_ACCOUNT_API
+const CONTACT_API         = import.meta.env.VITE_CONTACT_API
+const ACCOUNT_SEARCH_API  = import.meta.env.VITE_ACCOUNT_SEARCH_API
+const CONTACT_SEARCH_API  = import.meta.env.VITE_CONTACT_SEARCH_API
 
 /* ── helpers ── */
 async function fetchUsers() {
@@ -30,6 +32,28 @@ async function fetchContacts() {
   const json = await res.json()
   // Each contact has { id, name, accountId, accountName }
   return json.data || []
+}
+
+// ── Search API helpers (Fuse.js server-side) ─────────────────────────────────
+// Used after speech extraction for accurate name resolution, and in dropdowns.
+async function searchAccountsAPI(query, limit = 5) {
+  if (!ACCOUNT_SEARCH_API || !query?.trim()) return []
+  try {
+    const res = await fetch(`${ACCOUNT_SEARCH_API}?q=${encodeURIComponent(query.trim())}&limit=${limit}`)
+    if (!res.ok) return []
+    const json = await res.json()
+    return json.data || []
+  } catch { return [] }
+}
+
+async function searchContactsAPI(query, limit = 5) {
+  if (!CONTACT_SEARCH_API || !query?.trim()) return []
+  try {
+    const res = await fetch(`${CONTACT_SEARCH_API}?q=${encodeURIComponent(query.trim())}&limit=${limit}`)
+    if (!res.ok) return []
+    const json = await res.json()
+    return json.data || []
+  } catch { return [] }
 }
 
 // POST a new account to the backend
@@ -396,17 +420,38 @@ function AccountStep({ editValues, setEditValues, accounts, setAccounts, contact
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [open, setOpen] = useState(true) // open by default when step is shown
+  const [searchResults, setSearchResults] = useState([])
+  const [searching, setSearching] = useState(false)
   const wrapRef = useRef(null)
+  const debounceRef = useRef(null)
 
   const lockedByContact = !!(editValues.contactId && editValues.accountId)
   const candidates = editValues.accountCandidates || []
   const inCandidateMode = candidates.length > 1 && !editValues.accountId
 
-  // Always show 5 defaults; filter when typing
-  const results = accountSearch.trim()
-    ? fuzzyMatch(accountSearch, accounts).slice(0, 6)
-    : accounts.slice(0, 5)
+  // Debounced API search — falls back to local list when query is empty
+  useEffect(() => {
+    clearTimeout(debounceRef.current)
+    if (!accountSearch.trim()) {
+      setSearchResults(accounts.slice(0, 5))
+      setSearching(false)
+      return
+    }
+    setSearching(true)
+    debounceRef.current = setTimeout(async () => {
+      const results = await searchAccountsAPI(accountSearch, 6)
+      setSearchResults(results.length > 0 ? results : fuzzyMatch(accountSearch, accounts).slice(0, 6))
+      setSearching(false)
+    }, 300)
+    return () => clearTimeout(debounceRef.current)
+  }, [accountSearch, accounts])
 
+  // Initialise results when step mounts
+  useEffect(() => {
+    setSearchResults(accounts.slice(0, 5))
+  }, [])
+
+  const results = searchResults
   const exactExists = accounts.some(a => a.name.toLowerCase() === accountSearch.trim().toLowerCase())
   const showCreate  = accountSearch.trim().length > 1 && !exactExists && !editValues.accountId && !inCandidateMode
 
@@ -478,7 +523,8 @@ function AccountStep({ editValues, setEditValues, accounts, setAccounts, contact
               onFocus={() => setOpen(true)}
               onChange={e => { setAccountSearch(e.target.value); setCreateError(''); setOpen(true) }}
             />
-            {accountSearch && (
+            {searching && <span className="vf-cf-searching">🔍</span>}
+            {accountSearch && !searching && (
               <button className="vf-cf-input-clear" type="button"
                 onClick={() => { setAccountSearch(''); setCreateError('') }}>✕</button>
             )}
@@ -499,7 +545,9 @@ function AccountStep({ editValues, setEditValues, accounts, setAccounts, contact
                   ))}
                 </>
               ) : (
-                <div className="vf-cf-dropdown-empty">No accounts found</div>
+                <div className="vf-cf-dropdown-empty">
+                  {searching ? 'Searching…' : 'No accounts found'}
+                </div>
               )}
               {showCreate && (
                 <div className="vf-cf-dropdown-create" onMouseDown={handleCreate}>
@@ -525,7 +573,10 @@ function ContactStep({ editValues, setEditValues, contacts, setContacts, account
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [open, setOpen] = useState(true)
+  const [searchResults, setSearchResults] = useState([])
+  const [searching, setSearching] = useState(false)
   const wrapRef = useRef(null)
+  const debounceRef = useRef(null)
 
   const candidates = editValues.contactCandidates || []
   const inCandidateMode = candidates.length > 1 && !editValues.contactId
@@ -534,11 +585,35 @@ function ContactStep({ editValues, setEditValues, contacts, setContacts, account
     ? contacts.filter(c => c.accountId === editValues.accountId)
     : contacts
 
-  // Always show 5 defaults; filter when typing
-  const results = contactSearch.trim()
-    ? fuzzyMatch(contactSearch, filteredContacts).slice(0, 6)
-    : filteredContacts.slice(0, 5)
+  // Debounced API search — respects accountId filter when set
+  useEffect(() => {
+    clearTimeout(debounceRef.current)
+    if (!contactSearch.trim()) {
+      setSearchResults(filteredContacts.slice(0, 5))
+      setSearching(false)
+      return
+    }
+    setSearching(true)
+    debounceRef.current = setTimeout(async () => {
+      const results = await searchContactsAPI(contactSearch, 6)
+      // If an account is selected, keep only contacts belonging to it
+      const filtered = editValues.accountId
+        ? results.filter(c => c.accountId === editValues.accountId)
+        : results
+      setSearchResults(
+        filtered.length > 0 ? filtered : fuzzyMatch(contactSearch, filteredContacts).slice(0, 6)
+      )
+      setSearching(false)
+    }, 300)
+    return () => clearTimeout(debounceRef.current)
+  }, [contactSearch, contacts, editValues.accountId])
 
+  // Initialise results when step mounts
+  useEffect(() => {
+    setSearchResults(filteredContacts.slice(0, 5))
+  }, [editValues.accountId])
+
+  const results = searchResults
   const exactExists = contacts.some(c => c.name.toLowerCase() === contactSearch.trim().toLowerCase())
   const showCreate  = contactSearch.trim().length > 1 && !exactExists && !editValues.contactId && !inCandidateMode
 
@@ -627,7 +702,8 @@ function ContactStep({ editValues, setEditValues, contacts, setContacts, account
               onFocus={() => setOpen(true)}
               onChange={e => { setContactSearch(e.target.value); setCreateError(''); setOpen(true) }}
             />
-            {contactSearch && (
+            {searching && <span className="vf-cf-searching">🔍</span>}
+            {contactSearch && !searching && (
               <button className="vf-cf-input-clear" type="button"
                 onClick={() => { setContactSearch(''); setCreateError('') }}>✕</button>
             )}
@@ -654,7 +730,7 @@ function ContactStep({ editValues, setEditValues, contacts, setContacts, account
                 </>
               ) : (
                 <div className="vf-cf-dropdown-empty">
-                  {editValues.accountId ? `No contacts in ${editValues.accountName}` : 'No contacts found'}
+                  {searching ? 'Searching…' : (editValues.accountId ? `No contacts in ${editValues.accountName}` : 'No contacts found')}
                 </div>
               )}
               {showCreate && (
@@ -748,22 +824,22 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
       const currentAccounts = accountsRef.current
       const currentContacts = contactsRef.current
 
-      // ── Resolve what AI mentioned ─────────────────────────────────────
+      // ── Resolve via server-side Fuse.js search (more accurate than client fuzzy) ──
       // 0 matches  → null + empty candidates → step shown (search/create)
       // 1 match    → auto-selected           → step skipped
       // 2+ matches → candidates stored       → step shown as choice list
       let preAccount = null, preAccountCandidates = []
       if (mentionedAccount) {
-        const m = fuzzyMatch(mentionedAccount, currentAccounts)
-        if (m.length === 1)     preAccount = m[0]
-        else if (m.length > 1)  preAccountCandidates = m
+        const results = await searchAccountsAPI(mentionedAccount, 5)
+        if (results.length === 1)     preAccount = results[0]
+        else if (results.length > 1)  preAccountCandidates = results
       }
 
       let preContact = null, preContactCandidates = []
       if (mentionedContact) {
-        const m = fuzzyMatch(mentionedContact, currentContacts)
-        if (m.length === 1)     preContact = m[0]
-        else if (m.length > 1)  preContactCandidates = m
+        const results = await searchContactsAPI(mentionedContact, 5)
+        if (results.length === 1)     preContact = results[0]
+        else if (results.length > 1)  preContactCandidates = results
       }
 
       // ── Cross-link: auto-fill the other side ──────────────────────────
@@ -989,7 +1065,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
 
         {(transcript || transcriptLangs) && (
           <div className="vf-transcript">
-            <span className="vf-transcript-label">🎙 Transcript</span>
+            <span className="vf-transcript-label">🎤 Transcript</span>
             {transcriptLangs ? (
               <div className="vf-transcript-langs">
                 <div className="vf-transcript-lang-row">
@@ -1191,7 +1267,7 @@ export default function VoiceTaskFlow({ onDone, onCancel }) {
   return (
     <div className="vf-container">
       <div className="vf-record-header">
-        <span className="vf-record-icon">🎙</span>
+        <span className="vf-record-icon">🎤</span>
         <div>
           <div className="vf-record-title">Voice Task Creator</div>
           <div className="vf-record-sub">
